@@ -1,0 +1,64 @@
+{
+    "name": "vinh0809it/keycloak-bundle",
+    "type": "symfony-bundle",
+    "description": "Keycloak for Symfony: a firewall authenticator over Symfony's OIDC token handler, per-client principal resolution, session cookies, a client for the realm's endpoints, dev tokens and a signing test stub.",
+    "keywords": [
+        "keycloak",
+        "symfony",
+        "symfony-bundle",
+        "oidc",
+        "openid-connect",
+        "oauth2",
+        "jwt",
+        "security",
+        "authentication"
+    ],
+    "license": "MIT",
+    "homepage": "https://github.com/vinh0809it/keycloak-bundle",
+    "authors": [
+        {
+            "name": "Vinh Vo",
+            "email": "vinh0809it@gmail.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/vinh0809it/keycloak-bundle/issues",
+        "source": "https://github.com/vinh0809it/keycloak-bundle",
+        "security": "https://github.com/vinh0809it/keycloak-bundle/security/policy"
+    },
+    "require": {
+        "php": "^8.3",
+        "psr/cache": "^3.0",
+        "psr/log": "^2.0 || ^3.0",
+        "symfony/cache-contracts": "^3.0",
+        "symfony/config": "^7.4 || ^8.1",
+        "symfony/dependency-injection": "^7.4 || ^8.1",
+        "symfony/framework-bundle": "^7.4 || ^8.1",
+        "symfony/http-client": "^7.4 || ^8.1",
+        "symfony/http-foundation": "^7.4 || ^8.1",
+        "symfony/http-kernel": "^7.4 || ^8.1",
+        "symfony/security-bundle": "^7.4 || ^8.1",
+        "symfony/security-core": "^7.4 || ^8.1",
+        "symfony/security-http": "^7.4.20 || ^8.1.8",
+        "web-token/jwt-library": "^4.0"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.94",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^12.0",
+        "symfony/browser-kit": "^7.4 || ^8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Vinh0809it\\KeycloakBundle\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Vinh0809it\\KeycloakBundle\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

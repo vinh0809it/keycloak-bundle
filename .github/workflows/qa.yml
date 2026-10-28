@@ -1,0 +1,88 @@
+name: QA
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    name: PHP ${{ matrix.php }} / Symfony ${{ matrix.symfony }}${{ matrix.lowest && ' / lowest' || '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.3', symfony: '7.4.*', lowest: true }
+          - { php: '8.3', symfony: '7.4.*' }
+          - { php: '8.4', symfony: '7.4.*' }
+          - { php: '8.4', symfony: '8.*' }
+          - { php: '8.5', symfony: '8.*' }
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer, flex
+          coverage: none
+
+      - name: Install
+        env:
+          SYMFONY_REQUIRE: ${{ matrix.symfony }}
+        run: composer update --no-interaction --no-progress --prefer-dist ${{ matrix.lowest && '--prefer-lowest --prefer-stable' || '' }}
+
+      - name: Unit and functional tests
+        run: vendor/bin/phpunit
+
+      - name: Static analysis
+        run: vendor/bin/phpstan analyse -c phpstan.dist.neon --no-progress
+
+      - name: Code style
+        if: ${{ !matrix.lowest }}
+        run: vendor/bin/php-cs-fixer fix --dry-run --diff
+
+  keycloak:
+    name: Keycloak ${{ matrix.keycloak }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        keycloak: ['26.5.5', '26.7.2']
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Start Keycloak
+        run: |
+          docker run -d --name keycloak -p 8080:8080 \
+            -v "$PWD/tests/Integration/realm.json:/opt/keycloak/data/import/realm.json:ro" \
+            quay.io/keycloak/keycloak:${{ matrix.keycloak }} start-dev --import-realm
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          tools: composer
+          coverage: none
+
+      - name: Install
+        run: composer update --no-interaction --no-progress --prefer-dist
+
+      - name: Wait for the realm
+        run: |
+          for i in $(seq 60); do
+            curl -sf -o /dev/null http://localhost:8080/realms/demo/.well-known/openid-configuration && exit 0
+            sleep 2
+          done
+          docker logs keycloak
+          exit 1
+
+      - name: Integration tests
+        env:
+          KEYCLOAK_URL: http://localhost:8080
+        run: vendor/bin/phpunit --testsuite Integration
