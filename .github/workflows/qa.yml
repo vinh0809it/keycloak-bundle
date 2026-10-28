@@ -41,6 +41,7 @@ jobs:
         run: vendor/bin/phpunit
 
       - name: Static analysis
+        if: ${{ !matrix.lowest }}
         run: vendor/bin/phpstan analyse -c phpstan.dist.neon --no-progress
 
       - name: Code style
