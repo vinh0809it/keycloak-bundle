@@ -13,26 +13,6 @@ JWKS, `iss`, `aud`, `exp`), so this bundle adds no cryptography of its own. It s
 configuration where it belongs: the realms, and what talks to them, once under `keycloak`, and each
 firewall's own part as its `keycloak` authenticator in `security.yaml`.
 
-## Why this bundle
-
-Symfony already verifies OIDC bearers, and other packages already do the browser login. This
-bundle is the Keycloak-shaped glue between them:
-
-| | Symfony `access_token` + `oidc` | [knpuniversity/oauth2-client-bundle](https://github.com/knpuniversity/oauth2-client-bundle) + [stevenmaguire/oauth2-keycloak](https://github.com/stevenmaguire/oauth2-keycloak) | this bundle |
-|---|---|---|---|
-| Verify bearer JWTs (discovery, JWKS, `iss`, `aud`, `exp`) | yes | no | yes, through Symfony's handler |
-| Several realms on one firewall, keys bound per issuer | yes, configured per firewall | no | yes, realms declared once and named |
-| A principal per Keycloak client (`azp`) and per issuer | write a user provider | no | `resolver`, `by_client`, `other_issuers` |
-| Browser login (authorization code + PKCE), refresh, logout | no | yes, session based | `KeycloakClient`, `SessionCookies` for a stateless BFF |
-| Client credentials with a cached token | no | no | `ServiceToken` |
-| Revoke, userinfo, RP-initiated logout URL | no | partly | yes |
-| Keycloak SPI endpoints and custom grant fields | no | no | `realm()`, `token()`, extra grant fields |
-| Dev bearers for local work, refused in prod | no | no | `dev_tokens` |
-| A signing test realm for your test suite | no | no | `KeycloakStub` |
-
-Use Symfony's handler alone when one realm and a plain user provider are enough. Use the
-oauth2-client bundle when the app is a stateful website whose only need is "log in with Keycloak".
-
 ## Requirements
 
 | | Supported | Tested in CI |
@@ -129,7 +109,7 @@ and anything else gets a 401.
 - **`keycloak.client.<name>`** for each entry under `clients`, and
   **`keycloak.service_token.<name>`** for one with a secret. Nothing is registered when
   `clients` is empty. See *Calling the realm*.
-- **`Vinh0809it\Vinh0809it\KeycloakBundle\Test\KeycloakStub`**: the realm for a test suite. Discovery, a JWKS the real
+- **`Vinh0809it\KeycloakBundle\Test\KeycloakStub`**: the realm for a test suite. Discovery, a JWKS the real
   verifier checks against, signed tokens, the client-credentials grant, and hooks for the app's own
   grants (`grant()`) and SPI endpoints (`on()`).
 

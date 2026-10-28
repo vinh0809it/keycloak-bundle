@@ -22,6 +22,5 @@ In scope: anything that makes the `keycloak` authenticator accept a token it sho
 signature, another issuer, another audience, an expired token), a dev token honoured outside
 development, or a secret or token leaked by the client, the session cookies or the logs.
 
-Out of scope: Keycloak itself and Symfony's own OIDC handler, reported to
-[Keycloak](https://github.com/keycloak/keycloak/security/policy) and
-[Symfony](https://symfony.com/security) respectively, and `KeycloakStub`, which is a test tool.
+Out of scope: Keycloak itself and Symfony's own OIDC handler, which are reported to their own
+projects, and `KeycloakStub`, which is a test tool.
