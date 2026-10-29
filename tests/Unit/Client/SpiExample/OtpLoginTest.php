@@ -22,7 +22,7 @@ use Symfony\Component\HttpClient\Response\MockResponse;
  */
 final class OtpLoginTest extends TestCase
 {
-    private const string REALM = 'https://keycloak.test/realms/test';
+    private const REALM = 'https://keycloak.test/realms/test';
 
     private KeycloakStub $realm;
     private OtpLogin $otp;
@@ -46,7 +46,7 @@ final class OtpLoginTest extends TestCase
         $session = $this->otp->send('user@example.com');
 
         self::assertNotSame('', $this->otp->login('user@example.com', $session, '123456')->accessToken);
-        self::assertSame(['grant_type' => 'password', 'username' => 'user@example.com', 'password' => '', 'session' => 's1', 'otp' => '123456', 'client_id' => 'app', '_path' => '/realms/test/protocol/openid-connect/token'], KeycloakStub::$requests[1]);
+        self::assertSame(['grant_type' => 'password', 'username' => 'user@example.com', 'password' => '', 'session' => 's1', 'otp' => '123456', 'client_id' => 'app', '_path' => '/realms/test/protocol/openid-connect/token', '_issuer' => self::REALM], KeycloakStub::$requests[1]);
     }
 
     public function testAWrongCodeIsTheUsersToRetry(): void

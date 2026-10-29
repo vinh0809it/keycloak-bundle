@@ -29,7 +29,7 @@ use Symfony\Component\Security\Http\Authenticator\AccessTokenAuthenticator;
 
 final class KeycloakBundleTest extends TestCase
 {
-    private const array REALM = ['realm' => '%env(KEYCLOAK_BASE_URI)%', 'audience' => 'my-api'];
+    private const REALM = ['realm' => '%env(KEYCLOAK_BASE_URI)%', 'audience' => 'my-api'];
 
     public function testTheOneRealmShorthandIsTheRealmAKeycloakFirewallAccepts(): void
     {
@@ -67,7 +67,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testTheAuthenticatorBringsItsOwnProviderAndReadsTheCookieWhenAsked(): void
     {
-        $container = self::build('dev', self::REALM, [
+        $container = self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at']]], [
             'main' => ['resolver' => 'app.member_resolver', 'by_client' => ['admin-web' => 'app.admin_resolver'], 'cookie' => true],
             'api' => ['by_client' => ['admin-web' => 'app.admin_resolver']],
         ]);
@@ -80,12 +80,12 @@ final class KeycloakBundleTest extends TestCase
 
         $main = $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'main');
         self::assertSame(AccessTokenAuthenticator::class, $main->getClass(), "Symfony's own authenticator, built from its public class");
-        self::assertEquals(new Reference(KeycloakBundle::TOKEN_HANDLER.'main'), $main->getArgument(0));
-        self::assertEquals(new Reference(KeycloakBundle::USER_PROVIDER.'main'), $main->getArgument(2));
+        self::assertEquals(new Reference(KeycloakBundle::TOKEN_HANDLER.'main'), $main->getArgument('$accessTokenHandler'));
+        self::assertEquals(new Reference(KeycloakBundle::USER_PROVIDER.'main'), $main->getArgument('$userProvider'));
 
-        $chain = $container->getDefinition((string) $main->getArgument(1));
+        $chain = $container->getDefinition((string) $main->getArgument('$accessTokenExtractor'));
         self::assertEquals([new Reference(KeycloakBundle::TOKEN_EXTRACTOR_HEADER), new Reference(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE)], $chain->getArgument(0), 'the bearer header first, then the cookie');
-        self::assertEquals(new Reference(KeycloakBundle::TOKEN_EXTRACTOR_HEADER), $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'api')->getArgument(1), 'no cookie: the header alone');
+        self::assertEquals(new Reference(KeycloakBundle::TOKEN_EXTRACTOR_HEADER), $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'api')->getArgument('$accessTokenExtractor'), 'no cookie: the header alone');
         self::assertSame(HeaderAccessTokenExtractor::class, $container->getDefinition(KeycloakBundle::TOKEN_EXTRACTOR_HEADER)->getClass());
     }
 
@@ -108,9 +108,9 @@ final class KeycloakBundleTest extends TestCase
             'api' => ['resolver' => 'r', 'token_extractors' => ['app.only_extractor']],
         ]);
 
-        $chain = $container->getDefinition((string) $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'main')->getArgument(1));
+        $chain = $container->getDefinition((string) $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'main')->getArgument('$accessTokenExtractor'));
         self::assertEquals([new Reference(KeycloakBundle::TOKEN_EXTRACTOR_HEADER), new Reference('app.origin_cookie_extractor')], $chain->getArgument(0));
-        self::assertEquals(new Reference('app.only_extractor'), $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'api')->getArgument(1), 'one extractor needs no chain');
+        self::assertEquals(new Reference('app.only_extractor'), $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'api')->getArgument('$accessTokenExtractor'), 'one extractor needs no chain');
     }
 
     public function testCookieAndTokenExtractorsTogetherAreAConfigurationError(): void
@@ -162,6 +162,135 @@ final class KeycloakBundleTest extends TestCase
         $this->expectExceptionMessage('debug off');
 
         (new KeycloakBundle())->getContainerExtension()?->load([self::REALM + ['dev_tokens' => ['user.1' => []]]], $container);
+    }
+
+    public function testADevTokenPatternThatCouldTakeAJwtIsRefused(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('{azp}~{sub}');
+
+        self::build('dev', self::REALM + ['dev_tokens' => ['user.{sub}' => []]]);
+    }
+
+    /** @return iterable<string, array{array<string, mixed>, string}> */
+    public static function badDevTokens(): iterable
+    {
+        yield 'claims that are not a map' => [['user.1' => 'admin'], 'map of claims'];
+        yield 'a placeholder named twice' => [['{sub}~{sub}' => []], 'twice'];
+        yield 'a placeholder starting with a digit' => [['{1}~{sub}' => []], 'not starting with a digit'];
+    }
+
+    /** @param array<string, mixed> $tokens */
+    #[DataProvider('badDevTokens')]
+    public function testADevTokenTheHandlerCouldNotServeIsRefused(array $tokens, string $message): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage($message);
+
+        self::build('dev', self::REALM + ['dev_tokens' => $tokens]);
+    }
+
+    public function testADevTokenWithNoClaimsStandsForNone(): void
+    {
+        $container = self::build('dev', self::REALM + ['dev_tokens' => ['user.1' => null]], ['main' => ['resolver' => 'r']]);
+
+        self::assertSame(['user.1' => []], $container->getDefinition(KeycloakBundle::DEV_TOKEN_HANDLER.'main')->getArgument(1));
+    }
+
+    public function testRealmNamesAreKeptVerbatim(): void
+    {
+        $container = self::build('dev', [
+            'audience' => 'shop-api',
+            'realms' => ['my-realm' => ['url' => 'http://kc/realms/my-realm'], 'other' => ['url' => 'http://kc/realms/other']],
+            'clients' => ['web' => ['realm' => 'my-realm']],
+        ], ['main' => ['realms' => ['my-realm', 'other'], 'by_realm' => ['my-realm' => 'app.resolver']]]);
+
+        self::assertSame([['url' => 'http://kc/realms/my-realm', 'issuer' => null]], [$container->getDefinition(KeycloakBundle::USER_PROVIDER.'main')->getArgument(2)[0]['provider']]);
+    }
+
+    public function testTheRefreshCookiesLifetimeMayComeFromTheEnvironment(): void
+    {
+        $container = self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at'], 'refresh' => ['name' => 'rt', 'session_lifetime' => '%env(int:RT_LIFETIME)%']]]);
+
+        self::assertSame('%env(int:RT_LIFETIME)%', $container->getDefinition(KeycloakBundle::SESSION_COOKIES)->getArgument(2));
+    }
+
+    public function testACookieSameSitePolicyMustBeOneBrowsersKnow(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('same_site');
+
+        self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at', 'same_site' => 'loose']]]);
+    }
+
+    public function testReadingTheCookieNeedsItsName(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('keycloak.cookies.access');
+
+        self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'cookie' => true]]);
+    }
+
+    public function testEachClientHasABrowserLoginWithItsOwnCookie(): void
+    {
+        $container = self::build('dev', self::REALM + ['clients' => [
+            'web' => [],
+            'admin' => ['login_cookie' => ['name' => 'admin_login', 'path' => '/admin', 'domain' => 'app.test'], 'return_origins' => ['https://admin.app.test']],
+        ]]);
+
+        $web = $container->getDefinition(KeycloakBundle::BROWSER_LOGIN.'web');
+        self::assertEquals(new Reference(KeycloakBundle::CLIENT.'web'), $web->getArgument(0));
+        self::assertSame(['keycloak_login_web', '/', null, 'lax'], $web->getArgument(1)->getArguments());
+        self::assertSame('%kernel.secret%', $web->getArgument(2), 'the login cookie is signed with the app\'s secret');
+        self::assertSame([], $web->getArgument(3), 'only this app\'s own paths by default');
+        $admin = $container->getDefinition(KeycloakBundle::BROWSER_LOGIN.'admin');
+        self::assertSame(['admin_login', '/admin', 'app.test', 'lax'], $admin->getArgument(1)->getArguments());
+        self::assertSame(['https://admin.app.test'], $admin->getArgument(3));
+    }
+
+    public function testTheFirewallsHandlersAreWrappedAsSecurityBundleWrapsItsOwn(): void
+    {
+        $container = self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'success_handler' => 'app.on_success', 'failure_handler' => 'app.on_failure']]);
+        $authenticator = $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'main');
+
+        $success = $container->getDefinition((string) $authenticator->getArgument('$successHandler'));
+        \assert($success instanceof ChildDefinition);
+        self::assertSame('security.authentication.custom_success_handler', $success->getParent());
+        self::assertEquals([new Reference('app.on_success'), [], 'main'], array_values($success->getArguments()));
+
+        $failure = $container->getDefinition((string) $authenticator->getArgument('$failureHandler'));
+        \assert($failure instanceof ChildDefinition);
+        self::assertSame('security.authentication.custom_failure_handler', $failure->getParent());
+        self::assertEquals([new Reference('app.on_failure'), []], array_values($failure->getArguments()));
+
+        self::assertNull(self::build('dev', self::REALM, ['main' => ['resolver' => 'r']])->getDefinition(KeycloakBundle::AUTHENTICATOR.'main')->getArgument('$failureHandler'));
+    }
+
+    public function testARealmsResolverIsMatchedByThatRealmsIssuer(): void
+    {
+        $container = self::build('dev', [
+            'audience' => 'shop-api',
+            'realms' => [
+                'customers' => ['url' => 'http://kc/realms/customers', 'issuer' => 'https://sso/realms/customers'],
+                'employees' => ['url' => 'http://kc/realms/employees'],
+            ],
+        ], ['main' => ['realms' => ['customers', 'employees'], 'by_realm' => ['employees' => 'app.staff_resolver']]]);
+
+        self::assertEquals(
+            [['provider' => ['url' => 'http://kc/realms/employees', 'issuer' => null], 'resolver' => new Reference('app.staff_resolver')]],
+            $container->getDefinition(KeycloakBundle::USER_PROVIDER.'main')->getArgument(2),
+        );
+    }
+
+    public function testARealmTheFirewallDoesNotAcceptCannotHaveAResolverThere(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('not one of the firewall\'s realms');
+
+        self::build('dev', [
+            'audience' => 'shop-api',
+            'realms' => ['customers' => ['url' => 'http://kc/realms/customers'], 'employees' => ['url' => 'http://kc/realms/employees']],
+        ], ['main' => ['realms' => ['customers'], 'resolver' => 'r', 'by_realm' => ['employees' => 'app.staff_resolver']]]);
     }
 
     public function testAStatefulFirewallIsRefused(): void

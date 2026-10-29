@@ -17,14 +17,20 @@ firewall's own part as its `keycloak` authenticator in `security.yaml`.
 
 | | Supported | Tested in CI |
 |---|---|---|
-| PHP | 8.3+ | 8.3, 8.4, 8.5 |
-| Symfony | 7.4.20+, 8.1.8+ | 7.4 (lowest and latest dependencies), 8.1 |
+| PHP | 8.2+ | 8.2, 8.3, 8.4, 8.5 |
+| Symfony | 7.4.13+, 8.0.13+ | 7.4 (lowest and latest dependencies), 8.0, 8.1 |
 | Keycloak | 26 | 26.5, 26.7, against a real server |
 
-The Symfony floor is `symfony/security-http` 7.4.20 / 8.1.8: earlier releases (8.0 included) pool the
-keys of every discovered provider, so with several realms a token signed by one realm could claim
-another's issuer. From those releases on, each provider's keys verify only tokens naming that
-provider as `iss`.
+The floor is `symfony/security-http` 7.4.13 / 8.0.13, below which Symfony's `oidc` handler accepts
+tokens missing `aud`, `iss` or `exp` (CVE-2026-45069). Symfony 8.0 is end of life and every 8.0
+release of `symfony/http-foundation` is affected by CVE-2026-108082, so Composer refuses it unless
+security blocking is turned off; prefer 8.1.
+
+**Several issuers on one firewall** (several realms, or `other_issuers`) need
+`symfony/security-http` 7.4.20 / 8.1.8 to be fully isolated from each other. Earlier releases verify a
+token against the keys of every provider on the firewall, whatever its `iss`, so whoever holds the
+private key of one provider can sign tokens claiming another. The bundle still runs on them and logs
+a warning, once per process, when such a firewall is built.
 
 ## Install
 
@@ -90,12 +96,16 @@ and anything else gets a 401.
 
 ## What it provides
 
+- **Key rotation**: a token whose signature none of the cached keys verifies has the firewall's
+  keys fetched afresh and is verified once more, at most once a minute per firewall, so a key the
+  realm publishes is picked up without clearing a cache.
 - **The `keycloak` authenticator** of a firewall: Symfony's access-token authenticator, verifying the
   bearer against the realms that firewall accepts, then turning the verified claims into the app's
-  principal through a `ClaimsResolverInterface` chosen by the token's `azp` (the Keycloak client it
-  was minted for) or the firewall's default. A realm URL works with or without a trailing slash, and
-  its issuer defaults to it. Across several realms, each realm's keys verify only tokens whose `iss`
-  is that realm's. It brings its own user provider.
+  principal through a `ClaimsResolverInterface` chosen by the token's issuer (`by_realm`,
+  `other_issuers`), else its `azp` (the Keycloak client it was minted for, `by_client`), else the
+  firewall's default. A realm URL works with or without a trailing slash, and its issuer defaults to
+  it. It brings its own user provider, and takes the firewall's own `success_handler` and
+  `failure_handler`.
 - **`keycloak.token_extractor.header`** and, when `cookies` is set,
   **`keycloak.token_extractor.cookie`**: where a firewall finds the token, the
   `Authorization: Bearer` header (Symfony's own extractor) and the access cookie. The firewall
@@ -103,15 +113,18 @@ and anything else gets a 401.
 - **`keycloak.session_cookies`**, when `cookies` is set: a backend-for-frontend's session.
   `set(Response, TokenSet)` writes the access and refresh cookies (HttpOnly, Secure, expiring with
   their tokens), `clear(Response)` ends them, `refreshToken(Request)` reads the refresh token. The
-  login flow itself (routes, PKCE state) stays the app's.
-- **`dev_tokens`**: literal bearers for local development (`user.1`, `admin.2`) answering with
-  configured claims, through the same resolvers as a real token. Refused in `prod`.
-- **`keycloak.client.<name>`** for each entry under `clients`, and
-  **`keycloak.service_token.<name>`** for one with a secret. Nothing is registered when
-  `clients` is empty. See *Calling the realm*.
+  login and callback routes stay the app's, built on `keycloak.browser_login.<name>`.
+- **`dev_tokens`**: bearers for local development answering with configured claims, through the
+  same resolvers as a real token: literal (`user.1`) or with `{claim}` placeholders (`{azp}~{sub}`
+  takes `mobile-app~42` as `azp: mobile-app, sub: 42`). A pattern needs a character no JWT holds
+  outside its placeholders, such as `~` or `:`. Refused in `prod`.
+- **`keycloak.client.<name>`** and **`keycloak.browser_login.<name>`** for each entry under
+  `clients`, and **`keycloak.service_token.<name>`** for one with a secret. Nothing is registered
+  when `clients` is empty. See *Calling the realm* and *Browser login*.
 - **`Vinh0809it\KeycloakBundle\Test\KeycloakStub`**: the realm for a test suite. Discovery, a JWKS the real
   verifier checks against, signed tokens, the client-credentials grant, and hooks for the app's own
-  grants (`grant()`) and SPI endpoints (`on()`).
+  grants (`onGrant()`, or `grant()` in a subclass) and SPI endpoints (`on()`).
+  **`KeycloakStubRouter`** puts several of them behind one `mock_response_factory`.
 
 ## Configuration reference
 
@@ -128,12 +141,14 @@ keycloak:
     clients:                                 # optional: only for a service that calls the realm
         service: { id: my-service, secret: '%env(SERVICE_CLIENT_SECRET)%', token_cache: cache.app }
         web: { id: web-app, secret: '%env(WEB_CLIENT_SECRET)%' }
+        # web: { ..., return_origins: [https://web.example.com], login_cookie: { name: web_login, path: /auth } }
     # algorithms: [RS256]                    # RS*, PS* or ES*; anything else is refused
 
 when@dev:
     keycloak:
         dev_tokens:                          # on every keycloak firewall; refused in prod and with debug off
             'user.1': { azp: mobile-app, username: 'user@example.com' }
+            '{azp}~{sub}': { email_verified: true }   # any client, any subject
 ```
 
 ```yaml
@@ -144,21 +159,25 @@ security:
             stateless: true
             keycloak:
                 resolver: App\Security\MemberResolver
-                by_client:                   # optional: azp => resolver
+                by_client:                   # optional: azp => resolver, in whichever realm the client is
                     admin-web: App\Security\AdminResolver
+                # by_realm: { employees: App\Security\StaffResolver }   # every token of that realm, before by_client
                 cookie: true                 # optional: also read the access cookie, after the header
                 # token_extractors: [keycloak.token_extractor.header, App\Security\OriginCookieExtractor]
                 #                            # instead of cookie: extractor ids, tried in order
                 # realms: [customers]         # with several realms
                 # audience: ...              # to override keycloak.audience
                 # other_issuers: [{ url, issuer, resolver }]   # OpenID providers other than the realms
+                # success_handler: App\Security\OnSuccess   # AuthenticationSuccessHandlerInterface
+                # failure_handler: App\Security\OnFailure   # AuthenticationFailureHandlerInterface; default a 401
 ```
 
 The firewall must be `stateless`: the principal is rebuilt from each request's token and is never
 reloaded from a session, so a stateful firewall is a configuration error. No `providers` entry is
 needed for it, and the firewall order and the access rules stay the app's.
 A decorator of the firewall's token handler (a legacy issuer, say) decorates
-`keycloak.token_handler.<firewall>`.
+`keycloak.token_handler.<firewall>`. `entry_point` and `user_checker` are the firewall's own and work
+as with any authenticator.
 
 ### Several realms
 
@@ -190,8 +209,10 @@ firewall one access-token authenticator: every other kind of bearer it takes goe
 refuse, Keycloak's tokens).
 
 - **Another OpenID provider** (another service's own tokens, with discovery): list it under the
-  firewall's `other_issuers`, with the resolver of its principals. It is verified by the same
-  handler, each provider's keys bound to its own issuer, and resolved by issuer before `by_client`.
+  firewall's `other_issuers`, with the resolver of its principals, and its `issuer` exactly as its
+  tokens carry it (a trailing slash included). It is verified by the same
+  handler (each provider's keys bound to its own issuer from `symfony/security-http` 7.4.20 / 8.1.8
+  on, see *Requirements*), and resolved by issuer before `by_client`.
   An empty `url` (its env var unset) takes no token. Its tokens must carry the firewall's audience:
   one handler checks one.
 - **A token the app issues itself**: decorate `keycloak.token_handler.<firewall>`, answer the
@@ -226,6 +247,9 @@ final readonly class OwnTokenHandler implements AccessTokenHandlerInterface
 
 A firewall or client that names no realm gets the only one declared; with several, leaving it out
 is a configuration error rather than a guess.
+
+`Claims::roles()` turns the realm roles, and one client's when given, into Symfony roles
+(`offline_access` is `ROLE_OFFLINE_ACCESS`): `new User($claims->sub, $claims->roles('my-api'))`.
 
 Apps name the bundle's services as strings, in YAML and in `#[Autowire]` alike; a typo fails the
 container build. Inside the bundle the ids come from the constants on `KeycloakBundle`.
@@ -277,8 +301,110 @@ Failures say whose they are:
 | `RequestRefusedException` | Keycloak refused the request (a spent code, an expired refresh token, a wrong OTP) | 401 to the caller |
 | `InvalidClientException` (a `RequestRefusedException`) | Keycloak refused THIS service's client (a wrong secret, a grant it may not use) | 502, never retry |
 | `KeycloakUnavailableException` | unreachable, 5xx, or a success without a token | 502 |
+| `LoginFailedException` | a browser's login could not be completed (see *Browser login*) | start a new login |
 
-All three implement `KeycloakException`.
+All of them implement `KeycloakException`.
+
+## Browser login
+
+`keycloak.browser_login.<name>` signs a browser in at the realm for each client under `clients`:
+the authorization code flow with PKCE, with the `state`, the PKCE verifier, the redirect URI and the
+page to return to kept in a short-lived login cookie (HttpOnly, Secure, SameSite=Lax, signed with
+`kernel.secret`, 10 minutes). On the callback it checks the cookie, the `state` the realm sent back
+and its `iss` (RFC 9207), then exchanges the code with the kept verifier. A callback it refuses has
+its code spent (Keycloak invalidates a code on a failed exchange), so whoever started the login the
+code belongs to cannot redeem it.
+
+The page to return to is a path of this app, or a URL on one of the client's `return_origins`
+(`https://web.example.com`, or `https://*.example.com` for its subdomains). `start()` refuses any
+other, so the one the callback hands back is safe to redirect to.
+
+```yaml
+keycloak:
+    cookies:
+        access: { name: app_at, domain: '%env(COOKIE_DOMAIN)%' }
+        refresh: { name: app_rt, path: /auth }
+    clients:
+        web: { id: web-app, secret: '%env(WEB_CLIENT_SECRET)%', return_origins: ['%env(WEB_ORIGIN)%'] }
+```
+
+A backend-for-frontend then needs four routes. The web navigates the browser to `/auth/login`
+(a page load, not `fetch`), and calls the API with its cookies (`credentials: 'include'`):
+
+```php
+public function __construct(
+    #[Autowire(service: 'keycloak.browser_login.web')] private BrowserLogin $login,
+    #[Autowire(service: 'keycloak.client.web')] private KeycloakClient $web,
+    #[Autowire(service: 'keycloak.session_cookies')] private SessionCookies $session,
+) {}
+
+#[Route('/auth/login', methods: ['GET'])]
+public function login(Request $request): Response
+{
+    return $this->login->start(
+        $this->generateUrl('auth_callback', [], UrlGeneratorInterface::ABSOLUTE_URL),
+        $request->query->get('return'),
+    );
+}
+
+// The realm redirects the browser here; the browser leaves for the page it came from.
+#[Route('/auth/callback', name: 'auth_callback', methods: ['GET'])]
+public function callback(Request $request): Response
+{
+    try {
+        $done = $this->login->finish($request);
+        $response = new RedirectResponse($done->returnTo ?? '/');
+        $this->session->set($response, $done->tokens);       // the session: access + refresh cookies
+    } catch (LoginFailedException $e) {
+        // Back where the login meant to go, with why it did not happen (access_denied...).
+        $response = new RedirectResponse(($e->returnTo ?? '/').'#login_error='.($e->error ?? 'failed'));
+    }
+    $this->login->clearLoginCookie($response);                // the login cookie is spent either way
+
+    return $response;
+}
+
+#[Route('/auth/refresh', methods: ['POST'])]
+public function refresh(Request $request): Response
+{
+    $response = new Response(null, 204);
+    try {
+        $this->session->set($response, $this->web->refresh((string) $this->session->refreshToken($request)));
+    } catch (RequestRefusedException) {
+        $response = new Response(null, 401);                  // the session is over: sign in again
+        $this->session->clear($response);
+    }
+
+    return $response;
+}
+
+#[Route('/auth/logout', methods: ['POST'])]
+public function logout(Request $request): Response
+{
+    $refreshToken = $this->session->refreshToken($request);
+    if (null !== $refreshToken) {
+        try {
+            $this->web->logout($refreshToken);                // ends the Keycloak session too
+        } catch (KeycloakException) {
+        }
+    }
+    $response = new Response(null, 204);
+    $this->session->clear($response);
+
+    return $response;
+}
+```
+
+`start()` takes further authorization parameters as its third argument (`scope`, `login_hint`,
+`kc_idp_hint`, `prompt`...). The cookie-authenticated `POST` routes (refresh, logout, and the app's
+own) need protection against cross-site requests: SameSite cookies cover other sites, not other
+subdomains of the same site, so check the `Origin` header against the web's origin as well.
+
+A browser holds one login at a time: one started in a second tab replaces the first, whose callback
+then fails. The login cookie's name (`keycloak_login_<name>` by default), path and domain are set
+under `clients.<name>.login_cookie`; its path must cover the callback. The ID token is not
+verified, so there is no `nonce`: the session is the access and refresh tokens, which the firewall
+verifies on each request.
 
 ## Extending with a Keycloak SPI
 
@@ -329,7 +455,8 @@ final class KeycloakStub extends \Vinh0809it\KeycloakBundle\Test\KeycloakStub
         #[Autowire(param: 'kernel.cache_dir')] string $cacheDir,
         #[Autowire(service: 'cache.app')] CacheItemPoolInterface $cache,
     ) {
-        parent::__construct('https://keycloak.test/realms/customers', $cacheDir, $cache);
+        // The last argument names the firewalls that verify its tokens, whose cached keys it renews.
+        parent::__construct('https://keycloak.test/realms/customers', $cacheDir, $cache, ['api']);
         $this->serviceClient('my-service', ['sub' => '...', 'azp' => 'my-service', 'aud' => ['other-api']]);
     }
 
@@ -339,6 +466,30 @@ final class KeycloakStub extends \Vinh0809it\KeycloakBundle\Test\KeycloakStub
     }
 }
 ```
+
+With several realms, or another OpenID provider, give each its own stub and route between them:
+
+```php
+$services->set(KeycloakStubRouter::class)->args([service(CustomersRealm::class), service(EmployeesRealm::class)]);
+// framework.http_client.mock_response_factory: Vinh0809it\KeycloakBundle\Test\KeycloakStubRouter
+```
+
+Each request goes to the stub whose issuer URL it is under. A grant handler gets the stub that was
+asked as its second argument, and `KeycloakStub::$requests` records each request's `_issuer`.
+
+## Known limitations
+
+- **Clock skew.** Symfony's `oidc` handler checks `iat`, `nbf` and `exp` with no leeway and offers no
+  option for one, so a node whose clock lags the realm's refuses a fresh token as issued in the
+  future. Keep the clocks in sync; a firewall that must tolerate drift keeps its own authenticator.
+- **Concurrent refreshes.** With the realm's *Revoke Refresh Token* on, a refresh token works once:
+  two tabs refreshing at the same moment race, and the loser's refresh is refused, which reads as a
+  logout. Refresh from one place (a shared promise in the web app), or leave the setting off.
+- **Other bearer authenticators on the same firewall** (Lexik, say). Symfony runs every authenticator
+  that supports a request, and the `keycloak` one supports every bearer, so its 401 would answer a
+  token meant for the other. Give it an extractor that returns only the tokens of its issuers
+  (`UnverifiedIssuer::of()`), under `token_extractors`, or verify the other tokens in a decorator of
+  `keycloak.token_handler.<firewall>`.
 
 ## Develop
 

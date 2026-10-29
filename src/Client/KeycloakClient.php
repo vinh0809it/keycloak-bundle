@@ -48,6 +48,12 @@ final readonly class KeycloakClient
         $this->publicRealm = rtrim('' !== (string) $publicRealm ? (string) $publicRealm : $realm, '/');
     }
 
+    /** The realm URL a browser reaches, which is also the `iss` its tokens and callbacks carry. */
+    public function issuer(): string
+    {
+        return $this->publicRealm;
+    }
+
     /**
      * Any grant at the token endpoint, with this client's credentials added.
      *
@@ -87,14 +93,19 @@ final readonly class KeycloakClient
     /**
      * Where a browser goes to sign in: the realm's own page, authorization code flow with PKCE (S256).
      *
-     * @param array<string, string|null> $extra further parameters (`login_hint`, `prompt`, `kc_idp_hint`...); null ones are left out
+     * @param array<string, string|null> $extra further parameters (`login_hint`, `prompt`, `kc_idp_hint`...) and the `scope`, `openid`
+     *                                          by default; a null one is left out. The client, redirect URI, state, PKCE and response mode
+     *                                          (the query) are the method's own
      */
     public function authorizationUrl(string $redirectUri, string $state, string $codeChallenge, array $extra = []): string
     {
+        $extra += ['scope' => 'openid'];
+        unset($extra['response_mode']);
+
         return $this->publicRealm.'/protocol/openid-connect/auth?'.http_build_query(array_filter([
             'client_id' => $this->clientId,
             'response_type' => 'code',
-            'scope' => 'openid',
+            'scope' => $extra['scope'],
             'redirect_uri' => $redirectUri,
             'state' => $state,
             'code_challenge' => $codeChallenge,

@@ -15,7 +15,9 @@ namespace Vinh0809it\KeycloakBundle\Client\Exception;
  *  - {@see InvalidClientException}: this service's client is misconfigured (a wrong secret, a
  *    client without a service account), never the end user's doing and never worth retrying;
  *  - {@see RequestRefusedException}: Keycloak refused what was asked (a spent code, an expired
- *    refresh token, wrong credentials), usually the end user signs in again.
+ *    refresh token, wrong credentials), usually the end user signs in again;
+ *  - {@see \Vinh0809it\KeycloakBundle\Session\LoginFailedException}: a browser's login could not
+ *    be completed, the app starts a new one.
  */
 interface KeycloakException extends \Throwable
 {

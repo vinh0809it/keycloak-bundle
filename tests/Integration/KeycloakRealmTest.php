@@ -11,10 +11,14 @@ namespace Vinh0809it\KeycloakBundle\Tests\Integration;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
 use Symfony\Component\HttpClient\HttpClient;
+use Symfony\Component\HttpFoundation\Request;
 use Vinh0809it\KeycloakBundle\Client\Exception\InvalidClientException;
 use Vinh0809it\KeycloakBundle\Client\Exception\RequestRefusedException;
 use Vinh0809it\KeycloakBundle\Client\KeycloakClient;
 use Vinh0809it\KeycloakBundle\Client\ServiceToken;
+use Vinh0809it\KeycloakBundle\Session\BrowserLogin;
+use Vinh0809it\KeycloakBundle\Session\CookieOptions;
+use Vinh0809it\KeycloakBundle\Session\LoginFailedException;
 use Vinh0809it\KeycloakBundle\Tests\Integration\App\IntegrationKernel;
 
 /**
@@ -79,6 +83,9 @@ final class KeycloakRealmTest extends WebTestCase
         $tokens = $this->app()->password('alice', 'alice-password', ['scope' => 'openid']);
         \assert(null !== $tokens->refreshToken);
 
+        self::assertContains('openid', explode(' ', (string) $tokens->scope));
+        self::assertSame('Bearer', $tokens->tokenType);
+
         $refreshed = $this->app()->refresh($tokens->refreshToken);
 
         self::assertNotSame($tokens->accessToken, $refreshed->accessToken);
@@ -130,13 +137,60 @@ final class KeycloakRealmTest extends WebTestCase
     {
         $http = HttpClient::create(['max_redirects' => 0]);
 
-        $login = $http->request('GET', $this->app()->authorizationUrl('http://localhost/callback', 'state-1', rtrim(strtr(base64_encode(hash('sha256', 'verifier', true)), '+/', '-_'), '=')));
+        $login = $http->request('GET', $this->app()->authorizationUrl('http://localhost/callback', 'state-1', rtrim(strtr(base64_encode(hash('sha256', 'verifier', true)), '+/', '-_'), '='), ['scope' => 'openid offline_access']));
         self::assertSame(200, $login->getStatusCode());
         self::assertStringContainsString('<form', $login->getContent());
 
         $logout = $http->request('GET', $this->app()->logoutUrl('http://localhost/bye', state: 'state-2'));
         self::assertSame(302, $logout->getStatusCode(), 'with no session to end, Keycloak goes straight back');
         self::assertSame('http://localhost/bye?state=state-2', $logout->getHeaders(false)['location'][0] ?? null);
+    }
+
+    public function testABrowserSignsInThroughTheRealmsLoginPage(): void
+    {
+        $login = new BrowserLogin($this->app(), new CookieOptions('kc_login'), 'app-secret');
+        $start = $login->start('http://localhost/callback', '/orders');
+
+        $request = Request::create(self::signIn($start->getTargetUrl()), 'GET', [], ['kc_login' => (string) $start->headers->getCookies()[0]->getValue()]);
+        $done = $login->finish($request);
+
+        self::assertSame('/orders', $done->returnTo);
+        self::assertSame(200, $this->whoami($done->tokens->accessToken));
+    }
+
+    public function testTheCodeOfACallbackTheLoginRefusesCannotBeRedeemedAfterwards(): void
+    {
+        $login = new BrowserLogin($this->app(), new CookieOptions('kc_login'), 'app-secret');
+        $verifier = str_repeat('v', 50);
+        $callback = self::signIn($this->app()->authorizationUrl('http://localhost/callback', 'theirs', rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=')));
+        parse_str((string) parse_url($callback, \PHP_URL_QUERY), $query);
+
+        try {
+            $login->finish(Request::create($callback));
+            self::fail('A callback without a login was accepted.');
+        } catch (LoginFailedException) {
+        }
+
+        $this->expectException(RequestRefusedException::class);
+        $this->app()->exchangeCode((string) $query['code'], 'http://localhost/callback', $verifier);
+    }
+
+    /** A browser signing in as alice at $authorizationUrl: the URL of the realm's redirect back. */
+    private static function signIn(string $authorizationUrl): string
+    {
+        $http = HttpClient::create(['max_redirects' => 0]);
+        $page = $http->request('GET', $authorizationUrl);
+        $cookies = implode('; ', array_map(static fn (string $header): string => explode(';', $header, 2)[0], $page->getHeaders()['set-cookie'] ?? []));
+        self::assertSame(1, preg_match('/<form[^>]+action="([^"]+)"/', $page->getContent(), $form));
+        $posted = $http->request('POST', html_entity_decode($form[1]), [
+            'headers' => ['Cookie' => $cookies],
+            'body' => ['username' => 'alice', 'password' => 'alice-password'],
+        ]);
+        self::assertSame(302, $posted->getStatusCode());
+        $callback = $posted->getHeaders(false)['location'][0];
+        self::assertStringStartsWith('http://localhost/callback?', $callback);
+
+        return $callback;
     }
 
     private function app(): KeycloakClient

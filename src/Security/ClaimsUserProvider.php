@@ -58,7 +58,7 @@ final readonly class ClaimsUserProvider implements AttributesBasedUserProviderIn
             return null;
         }
         foreach ($this->byIssuer as ['provider' => $provider, 'resolver' => $resolver]) {
-            if (\in_array(rtrim($issuer, '/'), RealmTokenHandlerFactory::issuers([$provider]), true)) {
+            if (\in_array($issuer, RealmTokenHandlerFactory::issuers([$provider]), true)) {
                 return $resolver;
             }
         }

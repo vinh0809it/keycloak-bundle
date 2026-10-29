@@ -22,7 +22,7 @@ use Symfony\Contracts\Cache\ItemInterface;
  */
 final class ServiceToken
 {
-    private const int EXPIRY_MARGIN = 30;
+    private const EXPIRY_MARGIN = 30;
 
     private ?string $token = null;
     private int $expiresAt = 0;

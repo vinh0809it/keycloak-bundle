@@ -36,6 +36,29 @@ final class DevTokenHandlerTest extends TestCase
         self::assertSame('verified:eyJ...', $handler->getUserBadgeFrom('eyJ...')->getUserIdentifier());
     }
 
+    public function testAPatternTakesAnyBearerOfItsShapeAndSetsItsPlaceholdersAsClaims(): void
+    {
+        $handler = new DevTokenHandler(self::inner(), [
+            'user.1' => ['azp' => 'mobile-app'],
+            '{azp}~{sub}' => ['email_verified' => true],
+        ]);
+
+        $badge = $handler->getUserBadgeFrom('admin-web~42');
+        self::assertSame('42', $badge->getUserIdentifier());
+        self::assertSame(['azp' => 'admin-web', 'sub' => '42', 'email_verified' => true], $badge->getAttributes());
+        self::assertSame('user.1', $handler->getUserBadgeFrom('user.1')->getUserIdentifier(), 'a literal bearer is matched as such');
+        self::assertSame('verified:eyJ.e30.sig', $handler->getUserBadgeFrom('eyJ.e30.sig')->getUserIdentifier(), 'a JWT is not of its shape');
+    }
+
+    public function testAPatternIsSafeOnlyWithACharacterNoJwtHolds(): void
+    {
+        self::assertTrue(DevTokenHandler::isSafePattern('{azp}~{sub}'));
+        self::assertTrue(DevTokenHandler::isSafePattern('user:{sub}'));
+        self::assertFalse(DevTokenHandler::isSafePattern('{sub}'));
+        self::assertFalse(DevTokenHandler::isSafePattern('user.{sub}'));
+        self::assertFalse(DevTokenHandler::isSafePattern('{a}.{b}.{c}'));
+    }
+
     private static function inner(): AccessTokenHandlerInterface
     {
         return new class () implements AccessTokenHandlerInterface {

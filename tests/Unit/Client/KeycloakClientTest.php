@@ -22,7 +22,7 @@ use Symfony\Component\HttpClient\Response\MockResponse;
 
 final class KeycloakClientTest extends TestCase
 {
-    private const string REALM = 'https://keycloak.test/realms/test';
+    private const REALM = 'https://keycloak.test/realms/test';
 
     private KeycloakStub $stub;
 
@@ -41,7 +41,7 @@ final class KeycloakClientTest extends TestCase
         self::assertSame(300, $tokens->expiresIn);
         self::assertNull($tokens->refreshToken);
         self::assertSame(
-            ['grant_type' => 'client_credentials', 'client_id' => 'test-api', 'client_secret' => 'secret', '_path' => '/realms/test/protocol/openid-connect/token'],
+            ['grant_type' => 'client_credentials', 'client_id' => 'test-api', 'client_secret' => 'secret', '_path' => '/realms/test/protocol/openid-connect/token', '_issuer' => self::REALM],
             KeycloakStub::$requests[0],
             'a realm URL with or without its trailing slash reaches the same endpoint',
         );
@@ -53,7 +53,7 @@ final class KeycloakClientTest extends TestCase
 
         $this->client('mobile-app', null)->logout('refresh-1');
 
-        self::assertSame(['refresh_token' => 'refresh-1', 'client_id' => 'mobile-app', '_path' => '/realms/test/protocol/openid-connect/logout'], KeycloakStub::$requests[0]);
+        self::assertSame(['refresh_token' => 'refresh-1', 'client_id' => 'mobile-app', '_path' => '/realms/test/protocol/openid-connect/logout', '_issuer' => self::REALM], KeycloakStub::$requests[0]);
     }
 
     public function testAnSpiDirectGrantCarriesItsOwnFields(): void
@@ -117,6 +117,24 @@ final class KeycloakClientTest extends TestCase
             self::REALM.'/protocol/openid-connect/auth?client_id=web-app&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fapp.test%2Fcallback&state=st&code_challenge=ch&code_challenge_method=S256&login_hint=user%40example.com',
             $client->authorizationUrl('https://app.test/callback', 'st', 'ch', ['login_hint' => 'user@example.com', 'prompt' => null]),
         );
+    }
+
+    public function testTheAuthorizationUrlTakesItsScopeButKeepsItsOwnStateAndPkce(): void
+    {
+        $client = new KeycloakClient(new MockHttpClient(), self::REALM, 'web-app');
+
+        self::assertSame(
+            self::REALM.'/protocol/openid-connect/auth?client_id=web-app&response_type=code&scope=openid%20offline_access&redirect_uri=https%3A%2F%2Fapp.test%2Fcallback&state=st&code_challenge=ch&code_challenge_method=S256',
+            $client->authorizationUrl('https://app.test/callback', 'st', 'ch', ['scope' => 'openid offline_access', 'state' => 'forged', 'code_challenge_method' => null, 'redirect_uri' => 'https://evil.test', 'response_mode' => 'fragment']),
+        );
+    }
+
+    public function testATokenSetKeepsItsScopeAndType(): void
+    {
+        $tokens = $this->answering(200, ['access_token' => 'at', 'expires_in' => 300, 'scope' => 'openid email', 'token_type' => 'Bearer'])->clientCredentials();
+
+        self::assertSame('openid email', $tokens->scope);
+        self::assertSame('Bearer', $tokens->tokenType);
     }
 
     public function testUserinfoIsAskedWithTheUsersOwnToken(): void

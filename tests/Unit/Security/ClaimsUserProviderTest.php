@@ -30,7 +30,7 @@ final class ClaimsUserProviderTest extends TestCase
     public function testATokenOfAnotherIssuerGoesToThatIssuersResolverWhateverItsClient(): void
     {
         $provider = new ClaimsUserProvider(self::resolver('default'), ['mobile-app' => self::resolver('client')], [
-            ['provider' => ['url' => 'http://legacy.local/', 'issuer' => 'https://legacy.test/'], 'resolver' => self::resolver('legacy')],
+            ['provider' => ['url' => 'http://legacy.local/', 'issuer' => 'https://legacy.test'], 'resolver' => self::resolver('legacy')],
             ['provider' => ['url' => '', 'issuer' => ''], 'resolver' => self::resolver('unconfigured')],
         ]);
 

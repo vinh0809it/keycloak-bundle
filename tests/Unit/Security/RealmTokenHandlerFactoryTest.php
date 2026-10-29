@@ -13,6 +13,8 @@ use Jose\Component\Core\AlgorithmManager;
 use Jose\Component\Signature\Algorithm\RS256;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\AbstractLogger;
+use Symfony\Component\Security\Core\Exception\BadCredentialsException;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpClient\Response\MockResponse;
@@ -32,14 +34,19 @@ final class RealmTokenHandlerFactoryTest extends TestCase
     {
         $handler = RealmTokenHandlerFactory::create(new AlgorithmManager([new RS256()]), new MockHttpClient(), new ArrayAdapter(), 'key', [['url' => '', 'issuer' => '']], 'api');
 
-        // Never reached in practice: the keycloak authenticator takes no token for a realm without a URL.
-        $this->expectException(\LogicException::class);
+        $this->expectException(BadCredentialsException::class);
         $handler->getUserBadgeFrom('a.b.c');
     }
 
     public function testAnUnconfiguredRealmNamesNoIssuer(): void
     {
-        self::assertSame(['https://sso/realms/a'], RealmTokenHandlerFactory::issuers([['url' => 'http://kc/realms/a', 'issuer' => 'https://sso/realms/a/'], ['url' => '', 'issuer' => '']]));
+        self::assertSame(['https://sso/realms/a'], RealmTokenHandlerFactory::issuers([['url' => 'http://kc/realms/a', 'issuer' => 'https://sso/realms/a'], ['url' => '', 'issuer' => '']]));
+    }
+
+    public function testAnExplicitIssuerIsTakenAsWrittenAndOneFromTheUrlHasNoTrailingSlash(): void
+    {
+        self::assertSame('https://tenant.idp.test/', RealmTokenHandlerFactory::issuer(['url' => 'https://tenant.idp.test/', 'issuer' => 'https://tenant.idp.test/']));
+        self::assertSame('http://kc/realms/a', RealmTokenHandlerFactory::issuer(['url' => 'http://kc/realms/a/', 'issuer' => null]));
     }
 
     #[DataProvider('realms')]
@@ -61,5 +68,31 @@ final class RealmTokenHandlerFactoryTest extends TestCase
         }
 
         self::assertSame('http://keycloak:8080/realms/customers/.well-known/openid-configuration', $requested[0] ?? null);
+    }
+
+    public function testSeveralProvidersWithoutPerIssuerKeysAreWarnedAboutOncePerProcess(): void
+    {
+        (new \ReflectionProperty(RealmTokenHandlerFactory::class, 'warned'))->setValue(null, false);
+        $logger = new class () extends AbstractLogger {
+            /** @var list<string> */
+            public array $warnings = [];
+
+            public function log($level, \Stringable|string $message, array $context = []): void
+            {
+                $this->warnings[] = (string) $level;
+            }
+        };
+        $realms = [['url' => 'http://kc/realms/a', 'issuer' => null]];
+        $other = [['url' => 'https://other.test', 'issuer' => null]];
+
+        RealmTokenHandlerFactory::create(new AlgorithmManager([new RS256()]), new MockHttpClient(), new ArrayAdapter(), 'key', $realms, 'api', $logger, [], false);
+        self::assertSame([], $logger->warnings, 'one provider has no other to be confused with');
+
+        RealmTokenHandlerFactory::create(new AlgorithmManager([new RS256()]), new MockHttpClient(), new ArrayAdapter(), 'key', $realms, 'api', $logger, $other, true);
+        self::assertSame([], $logger->warnings, 'Symfony binds each provider\'s keys to its issuer');
+
+        RealmTokenHandlerFactory::create(new AlgorithmManager([new RS256()]), new MockHttpClient(), new ArrayAdapter(), 'key', $realms, 'api', $logger, $other, false);
+        RealmTokenHandlerFactory::create(new AlgorithmManager([new RS256()]), new MockHttpClient(), new ArrayAdapter(), 'key', $realms, 'api', $logger, $other, false);
+        self::assertSame(['warning'], $logger->warnings);
     }
 }

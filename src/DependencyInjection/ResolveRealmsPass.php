@@ -25,7 +25,7 @@ use Symfony\Component\DependencyInjection\Reference;
  */
 final class ResolveRealmsPass implements CompilerPassInterface
 {
-    public const string TAG = 'keycloak.token_handler';
+    public const TAG = 'keycloak.token_handler';
 
     public function process(ContainerBuilder $container): void
     {
@@ -49,6 +49,9 @@ final class ResolveRealmsPass implements CompilerPassInterface
             $handler = $container->getDefinition($id);
 
             self::assertStateless($container, $firewall);
+            if (($tags[0]['cookie'] ?? false) && !$container->hasDefinition(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE)) {
+                throw new InvalidConfigurationException(\sprintf('security.firewalls.%s.keycloak reads the access cookie, which keycloak.cookies.access must name.', $firewall));
+            }
 
             /** @var list<string> $names */
             $names = $handler->getArgument('$realms');
@@ -57,6 +60,8 @@ final class ResolveRealmsPass implements CompilerPassInterface
                 $accepted[] = $realms[KeycloakBundle::realmName($realms, $name, \sprintf('security.firewalls.%s.keycloak', $firewall))];
             }
             $handler->setArgument('$realms', $accepted);
+            $handler->setArgument('$perIssuerKeys', '%'.KeycloakBundle::PER_ISSUER_KEYS_PARAMETER.'%');
+            self::resolveRealmResolvers($container, $firewall, $realms, [] === $names ? [KeycloakBundle::realmName($realms, null, '')] : $names);
             $handler->setArgument('$audience', $handler->getArgument('$audience') ?? $audience
                 ?? throw new InvalidConfigurationException(\sprintf('security.firewalls.%s.keycloak needs an "audience", or keycloak one.', $firewall)));
 
@@ -66,6 +71,30 @@ final class ResolveRealmsPass implements CompilerPassInterface
                     ->setArguments([new Reference('.inner'), $devTokens]);
             }
         }
+    }
+
+    /**
+     * Replaces the realm names under the firewall's `by_realm` with those realms, which the user
+     * provider matches a token's `iss` against.
+     *
+     * @param array<string, array{url: string, issuer: ?string}> $realms   every declared realm
+     * @param list<string>                                       $accepted the realms the firewall accepts
+     */
+    private static function resolveRealmResolvers(ContainerBuilder $container, string $firewall, array $realms, array $accepted): void
+    {
+        $provider = $container->getDefinition(KeycloakBundle::USER_PROVIDER.$firewall);
+        /** @var list<array{provider: string|array{url: string, issuer: ?string}, resolver: mixed}> $byIssuer */
+        $byIssuer = $provider->getArgument(2);
+        foreach ($byIssuer as $i => ['provider' => $realm]) {
+            if (!\is_string($realm)) {
+                continue;
+            }
+            if (!\in_array($realm, $accepted, true)) {
+                throw new InvalidConfigurationException(\sprintf('security.firewalls.%s.keycloak.by_realm names "%s", which is not one of the firewall\'s realms (%s).', $firewall, $realm, implode(', ', $accepted)));
+            }
+            $byIssuer[$i]['provider'] = $realms[$realm];
+        }
+        $provider->setArgument(2, $byIssuer);
     }
 
     /**

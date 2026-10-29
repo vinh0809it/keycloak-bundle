@@ -58,4 +58,16 @@ final class ClaimsTest extends TestCase
 
         Claims::fromAttributes('s', ['username' => ''])->string('username');
     }
+
+    public function testRolesAreTheRealmsAndOneClientsAsSymfonyRoles(): void
+    {
+        $claims = Claims::fromAttributes('s', [
+            'realm_access' => ['roles' => ['offline_access', 'member']],
+            'resource_access' => ['my-api' => ['roles' => ['order-admin', 'member']], 'other' => ['roles' => ['x']]],
+        ]);
+
+        self::assertSame(['ROLE_OFFLINE_ACCESS', 'ROLE_MEMBER'], $claims->roles());
+        self::assertSame(['ROLE_OFFLINE_ACCESS', 'ROLE_MEMBER', 'ROLE_ORDER_ADMIN'], $claims->roles('my-api'));
+        self::assertSame(['KC_OFFLINE_ACCESS', 'KC_MEMBER'], $claims->roles(prefix: 'KC_'));
+    }
 }

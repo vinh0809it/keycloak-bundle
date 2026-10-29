@@ -22,6 +22,8 @@ final readonly class TokenSet
         public ?string $refreshToken = null,
         public int $refreshExpiresIn = 0,
         public ?string $idToken = null,
+        public ?string $scope = null,
+        public ?string $tokenType = null,
     ) {
     }
 
@@ -36,6 +38,8 @@ final readonly class TokenSet
             self::stringOrNull($response['refresh_token'] ?? null),
             (int) ($response['refresh_expires_in'] ?? 0),
             self::stringOrNull($response['id_token'] ?? null),
+            self::stringOrNull($response['scope'] ?? null),
+            self::stringOrNull($response['token_type'] ?? null),
         );
     }
 

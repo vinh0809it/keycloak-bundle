@@ -35,9 +35,10 @@ use Symfony\Component\HttpClient\Response\MockResponse;
  */
 class KeycloakStub
 {
-    public const string KEY_ID = 'stub';
+    /** The prefix of each realm's key id, which ends with a hash of its issuer. */
+    public const KEY_ID = 'stub';
 
-    /** @var list<array<string, mixed>> every form body Keycloak received, with the request path as `_path` */
+    /** @var list<array<string, mixed>> every form body Keycloak received, with the request path as `_path` and the realm's issuer as `_issuer` */
     public static array $requests = [];
 
     /** @var array<string, JWK> issuer => its signing key: each realm signs with its own */
@@ -49,7 +50,7 @@ class KeycloakStub
     /** @var list<array{string, string, callable(array<string, mixed>, array<string, mixed>): MockResponse}> method, path suffix, handler */
     private array $routes = [];
 
-    /** @var list<callable(array<string, mixed>): ?MockResponse> */
+    /** @var list<callable(array<string, mixed>, self): ?MockResponse> */
     private array $grants = [];
 
     /**
@@ -67,6 +68,12 @@ class KeycloakStub
     public static function reset(): void
     {
         self::$requests = [];
+    }
+
+    /** The realm's issuer, which is also the URL its endpoints answer under. */
+    final public function issuer(): string
+    {
+        return rtrim($this->issuer, '/');
     }
 
     /**
@@ -95,7 +102,7 @@ class KeycloakStub
      * it returns null for one that is not its own, which goes on to the next handler, then to
      * {@see grant()}. Registered service clients are answered before any of them.
      *
-     * @param callable(array<string, mixed> $form): ?MockResponse $handler
+     * @param callable(array<string, mixed> $form, self $realm): ?MockResponse $handler
      */
     final public function onGrant(callable $handler): void
     {
@@ -109,10 +116,10 @@ class KeycloakStub
     {
         $path = (string) parse_url($url, \PHP_URL_PATH);
         parse_str((string) ($options['body'] ?? ''), $form);
-        self::$requests[] = $form + ['_path' => $path];
+        self::$requests[] = $form + ['_path' => $path, '_issuer' => $this->issuer()];
 
         if (str_ends_with($path, '/.well-known/openid-configuration')) {
-            return self::json(['issuer' => $this->issuer, 'jwks_uri' => $this->issuer.'/protocol/openid-connect/certs']);
+            return self::json(['issuer' => $this->issuer(), 'jwks_uri' => $this->issuer().'/protocol/openid-connect/certs']);
         }
         if (str_ends_with($path, '/protocol/openid-connect/certs')) {
             return self::json(['keys' => [$this->key()->toPublic()->jsonSerialize()]]);
@@ -130,6 +137,17 @@ class KeycloakStub
     }
 
     /**
+     * Replaces the realm's signing key with a new one, as a key rotation at the realm does: the
+     * verifier still holds the old key in its cache, and tokens signed from now on carry the new
+     * key's id.
+     */
+    final public function rotateKey(): void
+    {
+        $key = self::$keys[$this->issuer()] = JWKFactory::createRSAKey(2048, ['alg' => 'RS256', 'use' => 'sig', 'kid' => self::KEY_ID.'-'.bin2hex(random_bytes(4))]);
+        file_put_contents($this->keyFile(), json_encode($key->jsonSerialize()));
+    }
+
+    /**
      * A token the verifier accepts: $claims signed with the realm's key, `iss`, `iat` and `exp`
      * filled in when absent.
      *
@@ -138,12 +156,12 @@ class KeycloakStub
     final public function sign(array $claims): string
     {
         $now = time();
-        $payload = $claims + ['iss' => $this->issuer, 'iat' => $now, 'exp' => $now + 300];
+        $payload = $claims + ['iss' => $this->issuer(), 'iat' => $now, 'exp' => $now + 300];
 
         $jws = (new JWSBuilder(new AlgorithmManager([new RS256()])))
             ->create()
             ->withPayload((string) json_encode($payload, \JSON_THROW_ON_ERROR))
-            ->addSignature($this->key(), ['alg' => 'RS256', 'kid' => self::KEY_ID])
+            ->addSignature($this->key(), ['alg' => 'RS256', 'kid' => $this->key()->get('kid')])
             ->build();
 
         return (new CompactSerializer())->serialize($jws);
@@ -172,6 +190,11 @@ class KeycloakStub
         ]);
     }
 
+    private function keyFile(): string
+    {
+        return $this->cacheDir.'/keycloak-stub.'.md5($this->issuer()).'.key.json';
+    }
+
     /**
      * @param array<string, mixed> $form
      */
@@ -191,7 +214,7 @@ class KeycloakStub
         }
 
         foreach ($this->grants as $handler) {
-            $response = $handler($form);
+            $response = $handler($form, $this);
             if (null !== $response) {
                 return $response;
             }
@@ -202,16 +225,16 @@ class KeycloakStub
 
     private function key(): JWK
     {
-        if (isset(self::$keys[$this->issuer])) {
-            return self::$keys[$this->issuer];
+        if (isset(self::$keys[$this->issuer()])) {
+            return self::$keys[$this->issuer()];
         }
 
-        $file = $this->cacheDir.'/keycloak-stub.'.md5($this->issuer).'.jwk.json';
+        $file = $this->keyFile();
         if (is_file($file)) {
-            return self::$keys[$this->issuer] = new JWK((array) json_decode((string) file_get_contents($file), true));
+            return self::$keys[$this->issuer()] = new JWK((array) json_decode((string) file_get_contents($file), true));
         }
 
-        $key = self::$keys[$this->issuer] = JWKFactory::createRSAKey(2048, ['alg' => 'RS256', 'use' => 'sig', 'kid' => self::KEY_ID]);
+        $key = self::$keys[$this->issuer()] = JWKFactory::createRSAKey(2048, ['alg' => 'RS256', 'use' => 'sig', 'kid' => self::KEY_ID.'-'.substr(md5($this->issuer()), 0, 8)]);
         @mkdir($this->cacheDir, 0o777, true);
         file_put_contents($file, json_encode($key->jsonSerialize()));
         foreach ($this->firewalls as $firewall) {

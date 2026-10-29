@@ -93,6 +93,23 @@ final readonly class Claims
         return self::strings((array) ($this->all[$claim] ?? []));
     }
 
+    /**
+     * The realm roles, and $client's roles when it is given, as Symfony roles: `$prefix` and the role
+     * upper-cased, each run of other characters than letters and digits made one `_`
+     * (`offline_access` is `ROLE_OFFLINE_ACCESS`, `order-admin` is `ROLE_ORDER_ADMIN`).
+     *
+     * @return list<string>
+     */
+    public function roles(?string $client = null, string $prefix = 'ROLE_'): array
+    {
+        $roles = [...$this->realmRoles, ...(null !== $client ? $this->clientRoles[$client] ?? [] : [])];
+
+        return array_values(array_unique(array_map(
+            static fn (string $role): string => $prefix.strtoupper(trim((string) preg_replace('/[^A-Za-z0-9]+/', '_', $role), '_')),
+            $roles,
+        )));
+    }
+
     private static function scalarString(mixed $value): ?string
     {
         return \is_scalar($value) && '' !== (string) $value ? (string) $value : null;

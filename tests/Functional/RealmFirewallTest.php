@@ -8,6 +8,8 @@ declare(strict_types=1);
 
 namespace Vinh0809it\KeycloakBundle\Tests\Functional;
 
+use Vinh0809it\KeycloakBundle\KeycloakBundle;
+use Vinh0809it\KeycloakBundle\Security\RealmTokenHandlerFactory;
 use Vinh0809it\KeycloakBundle\Test\KeycloakStub;
 use Vinh0809it\KeycloakBundle\Tests\Functional\App\TestKernel;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
@@ -40,6 +42,10 @@ final class RealmFirewallTest extends WebTestCase
 
     public function testASignedTokenIsTheDefaultResolversPrincipal(): void
     {
+        $cache = self::getContainer()->get('cache.app');
+        $cache->deleteItem(KeycloakBundle::discoveryCacheKey('main'));
+        $cache->deleteItem(KeycloakBundle::discoveryCacheKey('main').'.issuer_keysets');
+
         $this->client->request('GET', '/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token(['azp' => 'member-app'])]);
 
         self::assertResponseIsSuccessful();
@@ -136,6 +142,8 @@ final class RealmFirewallTest extends WebTestCase
     /** One realm's key never vouches for another realm's issuer, even where both are accepted. */
     public function testATokenNamingOneRealmButSignedByAnotherIsRefused(): void
     {
+        self::requirePerIssuerKeys();
+
         $this->client->request('GET', '/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->staffToken(['iss' => TestKernel::MEMBERS])]);
 
         self::assertResponseStatusCodeSame(401);
@@ -154,6 +162,8 @@ final class RealmFirewallTest extends WebTestCase
     /** Neither realm vouches for the other provider's issuer, nor it for theirs. */
     public function testATokenNamingTheOtherIssuerButSignedByARealmIsRefused(): void
     {
+        self::requirePerIssuerKeys();
+
         $this->client->request('GET', '/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token(['iss' => TestKernel::LEGACY])]);
 
         self::assertResponseStatusCodeSame(401);
@@ -196,5 +206,39 @@ final class RealmFirewallTest extends WebTestCase
     private function staffToken(array $claims = []): string
     {
         return $this->staff->sign($claims + ['sub' => 'sub-1', 'aud' => 'api']);
+    }
+
+    public function testARealmsTokensGoToItsResolverWhateverTheirClient(): void
+    {
+        $this->client->request('GET', '/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->staffToken(['azp' => 'member-app'])]);
+
+        self::assertSame('{"user":"staff:sub-1"}', $this->client->getResponse()->getContent());
+    }
+
+    public function testTheFirewallsFailureHandlerAnswersARefusedToken(): void
+    {
+        $this->client->request('GET', '/members/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->staffToken()]);
+
+        self::assertResponseStatusCodeSame(401);
+        self::assertSame('{"error":"Invalid credentials."}', $this->client->getResponse()->getContent());
+    }
+
+    public function testATokenSignedByARotatedKeyIsAcceptedOnceTheKeysAreRefetched(): void
+    {
+        $this->client->request('GET', '/members/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token()]);
+        self::assertResponseIsSuccessful('the verifier holds the realm\'s current key');
+        self::getContainer()->get('cache.app')->deleteItem(KeycloakBundle::discoveryCacheKey('members').'.refetched');
+
+        $this->members->rotateKey();
+        $this->client->request('GET', '/members/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token()]);
+
+        self::assertSame('{"user":"member:sub-1"}', $this->client->getResponse()->getContent());
+    }
+
+    private static function requirePerIssuerKeys(): void
+    {
+        if (!RealmTokenHandlerFactory::perIssuerKeys()) {
+            self::markTestSkipped('This symfony/security-http verifies every token against the keys of every provider.');
+        }
     }
 }

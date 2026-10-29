@@ -13,8 +13,10 @@ use Vinh0809it\KeycloakBundle\Client\ServiceToken;
 use Vinh0809it\KeycloakBundle\DependencyInjection\KeycloakAuthenticatorFactory;
 use Vinh0809it\KeycloakBundle\DependencyInjection\ResolveRealmsPass;
 use Vinh0809it\KeycloakBundle\Security\CookieTokenExtractor;
+use Vinh0809it\KeycloakBundle\Security\DevTokenHandler;
 use Vinh0809it\KeycloakBundle\Security\RealmTokenHandlerFactory;
 use Jose\Component\Core\AlgorithmManager;
+use Vinh0809it\KeycloakBundle\Session\BrowserLogin;
 use Vinh0809it\KeycloakBundle\Session\CookieOptions;
 use Vinh0809it\KeycloakBundle\Session\SessionCookies;
 use Symfony\Bundle\SecurityBundle\DependencyInjection\SecurityExtension;
@@ -44,9 +46,10 @@ use Symfony\Component\Security\Http\AccessToken\HeaderAccessTokenExtractor;
  *  - `keycloak.session_cookies`: when `cookies` is set, the {@see SessionCookies} a
  *    backend-for-frontend sets and clears the session with.
  *  - `keycloak.client.<name>`: a {@see KeycloakClient} of its realm per entry under
- *    `clients`, and `keycloak.service_token.<name>` for one with a secret.
- *  - `dev_tokens`: literal bearers in front of every keycloak firewall's verifier, answering with
- *    configured claims. Refused in `prod`.
+ *    `clients`, its `keycloak.browser_login.<name>` ({@see BrowserLogin}), and
+ *    `keycloak.service_token.<name>` for one with a secret.
+ *  - `dev_tokens`: bearers in front of every keycloak firewall's verifier, literal or with `{claim}`
+ *    placeholders, answering with configured claims. Refused in `prod`.
  *
  * ```yaml
  * keycloak:
@@ -63,7 +66,7 @@ use Symfony\Component\Security\Http\AccessToken\HeaderAccessTokenExtractor;
 final class KeycloakBundle extends AbstractBundle
 {
     /** The realm a one-realm configuration (`realm:` at the root) declares. */
-    public const string DEFAULT_REALM = 'default';
+    public const DEFAULT_REALM = 'default';
 
     /*
      * The ids of the services this bundle registers. A prefix ending in a dot takes the firewall's
@@ -71,28 +74,30 @@ final class KeycloakBundle extends AbstractBundle
      */
 
     /** + firewall name: the `keycloak` authenticator. */
-    public const string AUTHENTICATOR = 'keycloak.authenticator.';
+    public const AUTHENTICATOR = 'keycloak.authenticator.';
     /** + firewall name: the firewall's `oidc` access-token handler. */
-    public const string TOKEN_HANDLER = 'keycloak.token_handler.';
+    public const TOKEN_HANDLER = 'keycloak.token_handler.';
     /** + firewall name: the firewall's user provider. */
-    public const string USER_PROVIDER = 'keycloak.user_provider.';
+    public const USER_PROVIDER = 'keycloak.user_provider.';
     /** + firewall name: the dev-token decorator of the firewall's handler. */
-    public const string DEV_TOKEN_HANDLER = 'keycloak.dev_token_handler.';
+    public const DEV_TOKEN_HANDLER = 'keycloak.dev_token_handler.';
     /** + client name: the {@see KeycloakClient}. */
-    public const string CLIENT = 'keycloak.client.';
+    public const CLIENT = 'keycloak.client.';
     /** + client name: the confidential client's {@see ServiceToken}. */
-    public const string SERVICE_TOKEN = 'keycloak.service_token.';
-    public const string TOKEN_EXTRACTOR_HEADER = 'keycloak.token_extractor.header';
-    public const string TOKEN_EXTRACTOR_COOKIE = 'keycloak.token_extractor.cookie';
-    public const string SESSION_COOKIES = 'keycloak.session_cookies';
-    public const string SIGNATURE_ALGORITHMS = 'keycloak.signature_algorithms';
-    public const string HTTP_CLIENT = 'keycloak.http_client';
-    public const string DISCOVERY_CACHE = 'keycloak.discovery_cache';
+    public const SERVICE_TOKEN = 'keycloak.service_token.';
+    public const TOKEN_EXTRACTOR_HEADER = 'keycloak.token_extractor.header';
+    public const TOKEN_EXTRACTOR_COOKIE = 'keycloak.token_extractor.cookie';
+    public const SESSION_COOKIES = 'keycloak.session_cookies';
+    public const BROWSER_LOGIN = 'keycloak.browser_login.';
+    public const SIGNATURE_ALGORITHMS = 'keycloak.signature_algorithms';
+    public const HTTP_CLIENT = 'keycloak.http_client';
+    public const DISCOVERY_CACHE = 'keycloak.discovery_cache';
 
     /** What {@see ResolveRealmsPass} completes the firewalls' handlers with. */
-    public const string REALMS_PARAMETER = '.keycloak.realms';
-    public const string AUDIENCE_PARAMETER = '.keycloak.audience';
-    public const string DEV_TOKENS_PARAMETER = '.keycloak.dev_tokens';
+    public const REALMS_PARAMETER = '.keycloak.realms';
+    public const AUDIENCE_PARAMETER = '.keycloak.audience';
+    public const DEV_TOKENS_PARAMETER = '.keycloak.dev_tokens';
+    public const PER_ISSUER_KEYS_PARAMETER = '.keycloak.per_issuer_keys';
 
     /** Where a firewall's handler caches its realms' discovered configuration and keys. */
     public static function discoveryCacheKey(string $firewall): string
@@ -145,6 +150,7 @@ final class KeycloakBundle extends AbstractBundle
                 ->end()
                 ->arrayNode('realms')
                     ->info('Realms by name: every OpenID provider whose tokens a firewall accepts or whose clients this service calls as.')
+                    ->normalizeKeys(false)
                     ->useAttributeAsKey('name')
                     ->arrayPrototype()
                         ->children()
@@ -179,10 +185,16 @@ final class KeycloakBundle extends AbstractBundle
                     ->defaultValue('http_client')
                 ->end()
                 ->arrayNode('dev_tokens')
-                    ->info('Literal bearer => the claims it stands for (sub defaults to the bearer), on every keycloak firewall. Never in prod.')
+                    ->info('Bearer => the claims it stands for (sub defaults to the bearer), on every keycloak firewall; {name} placeholders match any text and set that claim, e.g. "{azp}~{sub}". Never in prod.')
                     ->normalizeKeys(false)
                     ->useAttributeAsKey('token')
-                    ->variablePrototype()->end()
+                    ->variablePrototype()
+                        ->beforeNormalization()->ifNull()->then(static fn (): array => [])->end()
+                        ->validate()
+                            ->ifTrue(static fn (mixed $claims): bool => !\is_array($claims))
+                            ->thenInvalid('A dev token stands for a map of claims, got %s.')
+                        ->end()
+                    ->end()
                 ->end()
                 ->arrayNode('cookies')
                     ->info('The session cookies of a backend-for-frontend; registers keycloak.token_extractor.cookie and keycloak.session_cookies.')
@@ -196,7 +208,7 @@ final class KeycloakBundle extends AbstractBundle
                                     ->info('Seconds a refresh token Keycloak gives no expiry (refresh_expires_in 0) is kept; null for a browser-session cookie.')
                                     ->defaultValue(1209600)
                                     ->validate()
-                                        ->ifTrue(static fn (mixed $v): bool => null !== $v && (!\is_int($v) || $v <= 0))
+                                        ->ifTrue(static fn (mixed $v): bool => null !== $v && !(\is_string($v) && str_starts_with($v, '%env(')) && (!\is_int($v) || $v <= 0))
                                         ->thenInvalid('session_lifetime must be a positive number of seconds, or null.')
                                     ->end()
                                 ->end()
@@ -204,7 +216,7 @@ final class KeycloakBundle extends AbstractBundle
                     ->end()
                 ->end()
                 ->arrayNode('clients')
-                    ->info('Keycloak clients this service calls a realm as; registers keycloak.client.<name>, and keycloak.service_token.<name> for a confidential one.')
+                    ->info('Keycloak clients this service calls a realm as; registers keycloak.client.<name> and keycloak.browser_login.<name>, and keycloak.service_token.<name> for a confidential one.')
                     ->normalizeKeys(false)
                     ->useAttributeAsKey('name')
                     ->arrayPrototype()
@@ -225,6 +237,28 @@ final class KeycloakBundle extends AbstractBundle
                                 ->info('Cache pool sharing the service token across requests and workers (cache.app, say); unset, it lives only as long as the service.')
                                 ->defaultNull()
                             ->end()
+                            ->arrayNode('return_origins')
+                                ->info('Origins (https://web.example.com, or https://*.example.com for its subdomains) a browser login may return to besides this app\'s own paths.')
+                                ->scalarPrototype()->end()
+                            ->end()
+                            ->arrayNode('login_cookie')
+                                ->info('The cookie keycloak.browser_login.<name> keeps a browser\'s login in between its start and its callback.')
+                                ->addDefaultsIfNotSet()
+                                ->children()
+                                    ->scalarNode('name')
+                                        ->info('Defaults to keycloak_login_<name>.')
+                                        ->defaultNull()
+                                    ->end()
+                                    ->scalarNode('path')
+                                        ->info('Must cover the callback route.')
+                                        ->defaultValue('/')
+                                    ->end()
+                                    ->scalarNode('domain')
+                                        ->info('Empty or unset: host-only.')
+                                        ->defaultNull()
+                                    ->end()
+                                ->end()
+                            ->end()
                         ->end()
                     ->end()
                 ->end()
@@ -242,7 +276,7 @@ final class KeycloakBundle extends AbstractBundle
      *     http_client: string,
      *     dev_tokens: array<string, array<string, mixed>>,
      *     cookies?: array{access: array{name: string, path: string, domain: ?string, same_site: string}, refresh?: array{name: string, path: string, domain: ?string, same_site: string, session_lifetime: ?int}},
-     *     clients: array<string, array{realm: ?string, id: ?string, secret: ?string, token_cache: ?string}>
+     *     clients: array<string, array{realm: ?string, id: ?string, secret: ?string, token_cache: ?string, return_origins: list<string>, login_cookie: array{name: ?string, path: string, domain: ?string}}>
      * } $config
      */
     public function loadExtension(array $config, ContainerConfigurator $container, ContainerBuilder $builder): void
@@ -259,10 +293,25 @@ final class KeycloakBundle extends AbstractBundle
         if ([] !== $config['dev_tokens'] && ('prod' === $builder->getParameter('kernel.environment') || !$builder->getParameter('kernel.debug'))) {
             throw new InvalidConfigurationException('keycloak.dev_tokens cannot be set in the prod environment, nor with debug off.');
         }
+        foreach (array_keys($config['dev_tokens']) as $token) {
+            $placeholders = DevTokenHandler::placeholders((string) $token);
+            foreach ($placeholders as $placeholder) {
+                if (1 !== preg_match('/^[A-Za-z_]\w{0,31}$/', $placeholder)) {
+                    throw new InvalidConfigurationException(\sprintf('keycloak.dev_tokens."%s": a placeholder is a claim name of at most 32 letters, digits and "_", not starting with a digit.', $token));
+                }
+            }
+            if (\count($placeholders) !== \count(array_unique($placeholders))) {
+                throw new InvalidConfigurationException(\sprintf('keycloak.dev_tokens."%s" names a placeholder twice.', $token));
+            }
+            if ([] !== $placeholders && !DevTokenHandler::isSafePattern((string) $token)) {
+                throw new InvalidConfigurationException(\sprintf('keycloak.dev_tokens."%s": a pattern needs a character a JWT never holds outside its placeholders (anything but letters, digits, "-", "_" and "."), e.g. "{azp}~{sub}", or it could take a real token.', $token));
+            }
+        }
 
         $builder->setParameter(self::REALMS_PARAMETER, $realms);
         $builder->setParameter(self::AUDIENCE_PARAMETER, $config['audience']);
         $builder->setParameter(self::DEV_TOKENS_PARAMETER, $config['dev_tokens']);
+        $builder->setParameter(self::PER_ISSUER_KEYS_PARAMETER, RealmTokenHandlerFactory::perIssuerKeys());
 
         $builder->setAlias(self::HTTP_CLIENT, $config['http_client']);
         $builder->setAlias(self::DISCOVERY_CACHE, $config['discovery_cache']);
@@ -296,6 +345,19 @@ final class KeycloakBundle extends AbstractBundle
                     $realm['issuer'],
                 ]);
 
+            $builder->register(self::BROWSER_LOGIN.$name, BrowserLogin::class)
+                ->setArguments([
+                    new Reference(self::CLIENT.$name),
+                    new Definition(CookieOptions::class, [
+                        $client['login_cookie']['name'] ?? 'keycloak_login_'.$name,
+                        $client['login_cookie']['path'],
+                        $client['login_cookie']['domain'],
+                        'lax',
+                    ]),
+                    '%kernel.secret%',
+                    $client['return_origins'],
+                ]);
+
             if (null !== $client['secret']) {
                 $builder->register(self::SERVICE_TOKEN.$name, ServiceToken::class)
                     ->setArguments([
@@ -317,7 +379,13 @@ final class KeycloakBundle extends AbstractBundle
                     ->info('Empty or unset: host-only.')
                     ->defaultNull()
                 ->end()
-                ->scalarNode('same_site')->defaultValue($sameSite)->end()
+                ->scalarNode('same_site')
+                    ->defaultValue($sameSite)
+                    ->validate()
+                        ->ifTrue(static fn (mixed $v): bool => !\in_array(strtolower((string) $v), ['lax', 'strict', 'none'], true))
+                        ->thenInvalid('same_site must be lax, strict or none, got %s.')
+                    ->end()
+                ->end()
             ->end();
     }
 
