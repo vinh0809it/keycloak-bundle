@@ -7,6 +7,8 @@ backward compatibility; each such break is listed here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+
 ### Added
 
 - Autowiring by argument name for each client's services: `KeycloakClient $<name>Client`,
@@ -17,6 +19,11 @@ backward compatibility; each such break is listed here.
   A realm's tokens are resolved among its own entry alone, so two realms can each have a client of
   the same id, and a client the entry does not list is refused unless it has a `resolver`. The
   short form, `employees: App\Security\StaffResolver`, is unchanged.
+
+### Changed
+
+- `ClaimsUserProvider`'s `$byIssuer` entries carry a `byClient` map and may have a null
+  `resolver`. It is built by the bundle; only code constructing it directly is affected.
 
 ### Fixed
 
@@ -91,6 +98,7 @@ First release. PHP 8.3+, Symfony 7.4.20+ or 8.1.8+, tested against Keycloak 26.
 - `KeycloakStub`: a test realm with discovery, JWKS, signed tokens and hooks for custom grants and
   endpoints.
 
-[Unreleased]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vinh0809it/keycloak-bundle/releases/tag/v0.1.0
