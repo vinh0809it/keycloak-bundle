@@ -30,13 +30,31 @@ final class ClaimsUserProviderTest extends TestCase
     public function testATokenOfAnotherIssuerGoesToThatIssuersResolverWhateverItsClient(): void
     {
         $provider = new ClaimsUserProvider(self::resolver('default'), ['mobile-app' => self::resolver('client')], [
-            ['provider' => ['url' => 'http://legacy.local/', 'issuer' => 'https://legacy.test'], 'resolver' => self::resolver('legacy')],
-            ['provider' => ['url' => '', 'issuer' => ''], 'resolver' => self::resolver('unconfigured')],
+            ['provider' => ['url' => 'http://legacy.local/', 'issuer' => 'https://legacy.test'], 'resolver' => self::resolver('legacy'), 'byClient' => []],
+            ['provider' => ['url' => '', 'issuer' => ''], 'resolver' => self::resolver('unconfigured'), 'byClient' => []],
         ]);
 
         self::assertSame('legacy', $provider->loadUserByIdentifier('s', ['iss' => 'https://legacy.test', 'azp' => 'mobile-app'])->getUserIdentifier());
         self::assertSame('client', $provider->loadUserByIdentifier('s', ['iss' => 'https://kc/realms/a', 'azp' => 'mobile-app'])->getUserIdentifier());
         self::assertSame('default', $provider->loadUserByIdentifier('s', ['iss' => ''])->getUserIdentifier(), 'an unconfigured issuer names no token');
+    }
+
+    public function testARealmsTokenIsPickedAmongThatRealmsResolversAlone(): void
+    {
+        $provider = new ClaimsUserProvider(self::resolver('default'), ['web' => self::resolver('member-web'), 'mobile-app' => self::resolver('mobile')], [
+            ['provider' => ['url' => 'http://kc/realms/employees', 'issuer' => null], 'resolver' => null, 'byClient' => ['web' => self::resolver('staff-web')]],
+            ['provider' => ['url' => 'http://kc/realms/partners', 'issuer' => null], 'resolver' => self::resolver('partner'), 'byClient' => ['web' => self::resolver('partner-web')]],
+        ]);
+        $employees = ['iss' => 'http://kc/realms/employees'];
+        $partners = ['iss' => 'http://kc/realms/partners'];
+
+        self::assertSame('staff-web', $provider->loadUserByIdentifier('s', $employees + ['azp' => 'web'])->getUserIdentifier(), 'the same client id, told apart by its realm');
+        self::assertSame('member-web', $provider->loadUserByIdentifier('s', ['iss' => 'http://kc/realms/customers', 'azp' => 'web'])->getUserIdentifier());
+        self::assertSame('partner-web', $provider->loadUserByIdentifier('s', $partners + ['azp' => 'web'])->getUserIdentifier());
+        self::assertSame('partner', $provider->loadUserByIdentifier('s', $partners + ['azp' => 'mobile-app'])->getUserIdentifier(), 'the realm\'s own default, not the firewall\'s by_client');
+
+        $this->expectException(UserNotFoundException::class);
+        $provider->loadUserByIdentifier('s', $employees + ['azp' => 'mobile-app']);
     }
 
     public function testAClientWithNoResolverAndNoDefaultIsRefused(): void

@@ -11,6 +11,7 @@ namespace Vinh0809it\KeycloakBundle\Tests\Functional;
 use Vinh0809it\KeycloakBundle\KeycloakBundle;
 use Vinh0809it\KeycloakBundle\Security\RealmTokenHandlerFactory;
 use Vinh0809it\KeycloakBundle\Test\KeycloakStub;
+use Vinh0809it\KeycloakBundle\Tests\Functional\App\AutowiredClient;
 use Vinh0809it\KeycloakBundle\Tests\Functional\App\TestKernel;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
@@ -185,6 +186,17 @@ final class RealmFirewallTest extends WebTestCase
         $this->client->request('GET', '/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer opaque-token']);
 
         self::assertResponseStatusCodeSame(401);
+    }
+
+    public function testTheBundlesServicesAutowireByNameAndTheOnlyClientByType(): void
+    {
+        $container = self::getContainer();
+        $app = $container->get(AutowiredClient::class);
+
+        self::assertSame($container->get(KeycloakBundle::CLIENT.'web'), $app->webClient);
+        self::assertSame($container->get(KeycloakBundle::BROWSER_LOGIN.'web'), $app->webLogin);
+        self::assertSame($app->webClient, $app->client);
+        self::assertSame($container->get(KeycloakBundle::SESSION_COOKIES), $app->cookies);
     }
 
     /**

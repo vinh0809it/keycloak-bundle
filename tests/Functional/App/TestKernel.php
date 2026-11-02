@@ -113,6 +113,7 @@ final class TestKernel extends Kernel
             ],
             'cookies' => ['access' => ['name' => 'access_token'], 'refresh' => ['name' => 'refresh_token', 'path' => '/session']],
             'dev_tokens' => ['dev.staff' => ['azp' => 'staff-web']],
+            'clients' => ['web' => ['realm' => 'members']],
         ]);
 
         $services = $container->services();
@@ -127,6 +128,7 @@ final class TestKernel extends Kernel
         }
         $services->set('test.legacy_resolver', PrefixResolver::class)->args(['legacy']);
         $services->set(JsonFailureHandler::class);
+        $services->set(AutowiredClient::class)->autowire()->public();
         $services->set(OwnTokenHandler::class)
             ->decorate(KeycloakBundle::TOKEN_HANDLER.'main')
             ->args([service('.inner')]);

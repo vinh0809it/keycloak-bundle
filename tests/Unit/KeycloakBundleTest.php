@@ -9,6 +9,7 @@ declare(strict_types=1);
 namespace Vinh0809it\KeycloakBundle\Tests\Unit;
 
 use Vinh0809it\KeycloakBundle\Client\KeycloakClient;
+use Vinh0809it\KeycloakBundle\Client\ServiceToken;
 use Vinh0809it\KeycloakBundle\DependencyInjection\KeycloakAuthenticatorFactory;
 use Vinh0809it\KeycloakBundle\DependencyInjection\ResolveRealmsPass;
 use Vinh0809it\KeycloakBundle\KeycloakBundle;
@@ -16,6 +17,8 @@ use Vinh0809it\KeycloakBundle\Security\ClaimsUserProvider;
 use Vinh0809it\KeycloakBundle\Security\CookieTokenExtractor;
 use Vinh0809it\KeycloakBundle\Security\DevTokenHandler;
 use Vinh0809it\KeycloakBundle\Security\RealmTokenHandlerFactory;
+use Vinh0809it\KeycloakBundle\Session\BrowserLogin;
+use Vinh0809it\KeycloakBundle\Session\SessionCookies;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Config\Definition\Builder\ArrayNodeDefinition;
@@ -98,7 +101,7 @@ final class KeycloakBundleTest extends TestCase
 
         $legacy = ['url' => '%env(LEGACY_BASE_URI)%', 'issuer' => '%env(LEGACY_ISSUER)%'];
         self::assertSame([$legacy], $container->getDefinition(KeycloakBundle::TOKEN_HANDLER.'main')->getArgument('$otherIssuers'));
-        self::assertEquals([['provider' => $legacy, 'resolver' => new Reference('app.legacy_resolver')]], $container->getDefinition(KeycloakBundle::USER_PROVIDER.'main')->getArgument(2));
+        self::assertEquals([['provider' => $legacy, 'resolver' => new Reference('app.legacy_resolver'), 'byClient' => []]], $container->getDefinition(KeycloakBundle::USER_PROVIDER.'main')->getArgument(2));
     }
 
     public function testExplicitTokenExtractorsAreTriedInTheirOrder(): void
@@ -277,9 +280,35 @@ final class KeycloakBundleTest extends TestCase
         ], ['main' => ['realms' => ['customers', 'employees'], 'by_realm' => ['employees' => 'app.staff_resolver']]]);
 
         self::assertEquals(
-            [['provider' => ['url' => 'http://kc/realms/employees', 'issuer' => null], 'resolver' => new Reference('app.staff_resolver')]],
+            [['provider' => ['url' => 'http://kc/realms/employees', 'issuer' => null], 'resolver' => new Reference('app.staff_resolver'), 'byClient' => []]],
             $container->getDefinition(KeycloakBundle::USER_PROVIDER.'main')->getArgument(2),
         );
+    }
+
+    public function testARealmMayHaveItsOwnResolverPerClient(): void
+    {
+        $container = self::build('dev', [
+            'audience' => 'shop-api',
+            'realms' => ['customers' => ['url' => 'http://kc/realms/customers'], 'employees' => ['url' => 'http://kc/realms/employees']],
+        ], ['main' => ['realms' => ['customers', 'employees'], 'by_client' => ['web' => 'app.member_resolver'], 'by_realm' => [
+            'employees' => ['by_client' => ['web' => 'app.staff_resolver', 'admin-web' => 'app.admin_resolver']],
+        ]]]);
+
+        self::assertEquals(
+            [['provider' => ['url' => 'http://kc/realms/employees', 'issuer' => null], 'resolver' => null, 'byClient' => [
+                'web' => new Reference('app.staff_resolver'),
+                'admin-web' => new Reference('app.admin_resolver'),
+            ]]],
+            $container->getDefinition(KeycloakBundle::USER_PROVIDER.'main')->getArgument(2),
+        );
+    }
+
+    public function testARealmEntryNeedsAResolverOrAClient(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('A by_realm entry needs a "resolver" or a "by_client".');
+
+        self::firewall(['by_realm' => ['employees' => []]]);
     }
 
     public function testARealmTheFirewallDoesNotAcceptCannotHaveAResolverThere(): void
@@ -439,6 +468,37 @@ final class KeycloakBundleTest extends TestCase
 
         self::assertSame('mobile-app', $container->getDefinition(KeycloakBundle::CLIENT.'mobile-app')->getArgument(2), 'the id defaults to the name');
         self::assertFalse($container->hasDefinition(KeycloakBundle::SERVICE_TOKEN.'mobile-app'), 'a public client has no service account');
+    }
+
+    public function testEachClientAutowiresByName(): void
+    {
+        $container = self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at']], 'clients' => [
+            'service' => ['secret' => 's'],
+            'mobile-app' => [],
+            '1st' => [],
+        ]]);
+
+        self::assertSame(KeycloakBundle::CLIENT.'service', (string) $container->getAlias(KeycloakClient::class.' $serviceClient'));
+        self::assertSame(KeycloakBundle::BROWSER_LOGIN.'service', (string) $container->getAlias(BrowserLogin::class.' $serviceLogin'));
+        self::assertSame(KeycloakBundle::SERVICE_TOKEN.'service', (string) $container->getAlias(ServiceToken::class.' $serviceToken'));
+        self::assertSame(KeycloakBundle::CLIENT.'mobile-app', (string) $container->getAlias(KeycloakClient::class.' $mobileAppClient'), 'camel-cased');
+        self::assertFalse($container->hasAlias(ServiceToken::class.' $mobileAppToken'), 'a public client has no service token');
+        self::assertTrue($container->hasDefinition(KeycloakBundle::CLIENT.'1st'), 'a name autowiring cannot spell keeps its service, without an alias');
+        self::assertSame(KeycloakBundle::SESSION_COOKIES, (string) $container->getAlias(SessionCookies::class));
+
+        self::assertFalse($container->hasAlias(KeycloakClient::class), 'several clients: no bare type');
+        self::assertFalse($container->hasAlias(BrowserLogin::class));
+        self::assertSame(KeycloakBundle::SERVICE_TOKEN.'service', (string) $container->getAlias(ServiceToken::class), 'the one confidential client');
+    }
+
+    public function testTheOnlyClientAutowiresByItsBareType(): void
+    {
+        $container = self::build('dev', self::REALM + ['clients' => ['web' => []]]);
+
+        self::assertSame(KeycloakBundle::CLIENT.'web', (string) $container->getAlias(KeycloakClient::class));
+        self::assertSame(KeycloakBundle::BROWSER_LOGIN.'web', (string) $container->getAlias(BrowserLogin::class));
+        self::assertFalse($container->hasAlias(ServiceToken::class), 'a public client has no service token');
+        self::assertFalse($container->hasAlias(SessionCookies::class), 'no cookies, no session cookies');
     }
 
     /**
