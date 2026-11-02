@@ -83,7 +83,7 @@ final class ResolveRealmsPass implements CompilerPassInterface
     private static function resolveRealmResolvers(ContainerBuilder $container, string $firewall, array $realms, array $accepted): void
     {
         $provider = $container->getDefinition(KeycloakBundle::USER_PROVIDER.$firewall);
-        /** @var list<array{provider: string|array{url: string, issuer: ?string}, resolver: mixed}> $byIssuer */
+        /** @var list<array{provider: string|array{url: string, issuer: ?string}, resolver: mixed, byClient: mixed}> $byIssuer */
         $byIssuer = $provider->getArgument(2);
         foreach ($byIssuer as $i => ['provider' => $realm]) {
             if (!\is_string($realm)) {

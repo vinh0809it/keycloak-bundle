@@ -47,7 +47,9 @@ use Symfony\Component\Security\Http\AccessToken\HeaderAccessTokenExtractor;
  *    backend-for-frontend sets and clears the session with.
  *  - `keycloak.client.<name>`: a {@see KeycloakClient} of its realm per entry under
  *    `clients`, its `keycloak.browser_login.<name>` ({@see BrowserLogin}), and
- *    `keycloak.service_token.<name>` for one with a secret.
+ *    `keycloak.service_token.<name>` for one with a secret. Each autowires by name
+ *    (`KeycloakClient $<name>Client`, `BrowserLogin $<name>Login`, `ServiceToken $<name>Token`),
+ *    and by its bare type when it is the only one.
  *  - `dev_tokens`: bearers in front of every keycloak firewall's verifier, literal or with `{claim}`
  *    placeholders, answering with configured claims. Refused in `prod`.
  *
@@ -130,7 +132,7 @@ final class KeycloakBundle extends AbstractBundle
     {
         $security = $container->hasExtension('security') ? $container->getExtension('security') : null;
         if (!$security instanceof SecurityExtension) {
-            throw new \LogicException('KeycloakBundle needs SecurityBundle, registered before it in config/bundles.php.');
+            throw new \LogicException('KeycloakBundle needs SecurityBundle, enabled in config/bundles.php.');
         }
         $security->addAuthenticatorFactory(new KeycloakAuthenticatorFactory());
         $container->addCompilerPass(new ResolveRealmsPass());
@@ -332,6 +334,7 @@ final class KeycloakBundle extends AbstractBundle
                     null !== $refresh ? self::cookieOptions($refresh) : null,
                     $refresh['session_lifetime'] ?? null,
                 ]);
+            $builder->setAlias(SessionCookies::class, self::SESSION_COOKIES);
         }
 
         foreach ($config['clients'] as $name => $client) {
@@ -366,6 +369,34 @@ final class KeycloakBundle extends AbstractBundle
                         '$cacheKey' => self::SERVICE_TOKEN.$name,
                     ]);
             }
+
+            self::aliasForArgument($builder, self::CLIENT.$name, KeycloakClient::class, $name.'Client');
+            self::aliasForArgument($builder, self::BROWSER_LOGIN.$name, BrowserLogin::class, $name.'Login');
+            if (null !== $client['secret']) {
+                self::aliasForArgument($builder, self::SERVICE_TOKEN.$name, ServiceToken::class, $name.'Token');
+            }
+        }
+
+        // The one client, or the one confidential client, also answers to its bare type.
+        if (1 === \count($config['clients'])) {
+            $name = (string) array_key_first($config['clients']);
+            $builder->setAlias(KeycloakClient::class, self::CLIENT.$name);
+            $builder->setAlias(BrowserLogin::class, self::BROWSER_LOGIN.$name);
+        }
+        $confidential = array_keys(array_filter($config['clients'], static fn (array $client): bool => null !== $client['secret']));
+        if (1 === \count($confidential)) {
+            $builder->setAlias(ServiceToken::class, self::SERVICE_TOKEN.$confidential[0]);
+        }
+    }
+
+    /**
+     * `Type $<name>` for autowiring, e.g. `KeycloakClient $webClient`; none for a name autowiring
+     * cannot spell, one not starting with a letter.
+     */
+    private static function aliasForArgument(ContainerBuilder $builder, string $id, string $type, string $name): void
+    {
+        if (1 === preg_match('/^[a-zA-Z_\x7f-\xff]/', $name)) {
+            $builder->registerAliasForArgument($id, $type, $name);
         }
     }
 

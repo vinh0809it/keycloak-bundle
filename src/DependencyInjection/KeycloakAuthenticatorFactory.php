@@ -76,10 +76,30 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
                     ->defaultNull()
                 ->end()
                 ->arrayNode('by_realm')
-                    ->info('Realm name (one of this firewall\'s realms) => resolver service id, for every token that realm issues.')
+                    ->info('Realm name (one of this firewall\'s realms) => the resolver of every token that realm issues, or its own resolver and by_client; a token of the realm neither claims is refused.')
                     ->normalizeKeys(false)
                     ->useAttributeAsKey('realm')
-                    ->scalarPrototype()->end()
+                    ->arrayPrototype()
+                        ->beforeNormalization()
+                            ->ifString()->then(static fn (string $resolver): array => ['resolver' => $resolver])
+                        ->end()
+                        ->children()
+                            ->scalarNode('resolver')
+                                ->info('Service id of the ClaimsResolverInterface for the realm\'s tokens no by_client entry claims.')
+                                ->defaultNull()
+                            ->end()
+                            ->arrayNode('by_client')
+                                ->info('Keycloak client id (the token\'s azp) in this realm => resolver service id.')
+                                ->normalizeKeys(false)
+                                ->useAttributeAsKey('azp')
+                                ->scalarPrototype()->end()
+                            ->end()
+                        ->end()
+                        ->validate()
+                            ->ifTrue(static fn (array $realm): bool => null === $realm['resolver'] && [] === $realm['by_client'])
+                            ->thenInvalid('A by_realm entry needs a "resolver" or a "by_client".')
+                        ->end()
+                    ->end()
                 ->end()
                 ->arrayNode('by_client')
                     ->info('Keycloak client id (the token\'s azp) => resolver service id.')
@@ -136,7 +156,7 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
     }
 
     /**
-     * @param array{realms: list<string>, audience: ?string, resolver: ?string, by_realm: array<string, string>, by_client: array<string, string>, other_issuers: list<array{url: string, issuer: ?string, resolver: string}>, cookie: bool, token_extractors: list<string>, success_handler: ?string, failure_handler: ?string} $config
+     * @param array{realms: list<string>, audience: ?string, resolver: ?string, by_realm: array<string, array{resolver: ?string, by_client: array<string, string>}>, by_client: array<string, string>, other_issuers: list<array{url: string, issuer: ?string, resolver: string}>, cookie: bool, token_extractors: list<string>, success_handler: ?string, failure_handler: ?string} $config
      */
     public function createAuthenticator(ContainerBuilder $container, string $firewallName, array $config, ?string $userProviderId): string
     {
@@ -156,24 +176,25 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
             ])
             ->addTag(ResolveRealmsPass::TAG, ['firewall' => $firewallName, 'cookie' => $config['cookie']]);
 
-        $byClient = [];
-        foreach ($config['by_client'] as $azp => $resolver) {
-            $byClient[$azp] = new Reference($resolver);
-        }
         $providerId = KeycloakBundle::USER_PROVIDER.$firewallName;
         $byIssuer = [];
-        foreach ($config['by_realm'] as $realm => $resolver) {
+        foreach ($config['by_realm'] as $realm => $resolvers) {
             // A realm's name until ResolveRealmsPass, which knows its URL and issuer.
-            $byIssuer[] = ['provider' => (string) $realm, 'resolver' => new Reference($resolver)];
+            $byIssuer[] = [
+                'provider' => (string) $realm,
+                'resolver' => self::reference($resolvers['resolver']),
+                'byClient' => self::references($resolvers['by_client']),
+            ];
         }
         foreach ($config['other_issuers'] as $provider) {
             $byIssuer[] = [
                 'provider' => ['url' => $provider['url'], 'issuer' => $provider['issuer']],
                 'resolver' => new Reference($provider['resolver']),
+                'byClient' => [],
             ];
         }
         $container->register($providerId, ClaimsUserProvider::class)
-            ->setArguments([null !== $config['resolver'] ? new Reference($config['resolver']) : null, $byClient, $byIssuer]);
+            ->setArguments([self::reference($config['resolver']), self::references($config['by_client']), $byIssuer]);
 
         $extractors = match (true) {
             [] !== $config['token_extractors'] => $config['token_extractors'],
@@ -198,6 +219,21 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
             ]);
 
         return $authenticatorId;
+    }
+
+    private static function reference(?string $serviceId): ?Reference
+    {
+        return null !== $serviceId ? new Reference($serviceId) : null;
+    }
+
+    /**
+     * @param array<string, string> $serviceIds Keycloak client id (`azp`) => resolver service id
+     *
+     * @return array<string, Reference>
+     */
+    private static function references(array $serviceIds): array
+    {
+        return array_map(static fn (string $id): Reference => new Reference($id), $serviceIds);
     }
 
     /**

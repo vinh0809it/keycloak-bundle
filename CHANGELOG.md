@@ -7,6 +7,22 @@ backward compatibility; each such break is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Autowiring by argument name for each client's services: `KeycloakClient $<name>Client`,
+  `BrowserLogin $<name>Login` and `ServiceToken $<name>Token` (`mobile-app` becomes
+  `$mobileAppClient`). The only client also autowires by its bare type, as does the only
+  confidential client's `ServiceToken`; `SessionCookies` always does. The service ids are unchanged.
+- `by_realm` entries may resolve per client: `employees: { by_client: { web: ... }, resolver: ... }`.
+  A realm's tokens are resolved among its own entry alone, so two realms can each have a client of
+  the same id, and a client the entry does not list is refused unless it has a `resolver`. The
+  short form, `employees: App\Security\StaffResolver`, is unchanged.
+
+### Fixed
+
+- The error for a missing SecurityBundle no longer claims it must come before this bundle in
+  `config/bundles.php`; the order does not matter.
+
 ## [0.2.0] - 2026-10-29
 
 ### Added

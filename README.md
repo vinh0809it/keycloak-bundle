@@ -159,9 +159,10 @@ security:
             stateless: true
             keycloak:
                 resolver: App\Security\MemberResolver
-                by_client:                   # optional: azp => resolver, in whichever realm the client is
+                by_client:                   # optional: azp => resolver, in ANY realm the firewall takes (see Several realms)
                     admin-web: App\Security\AdminResolver
                 # by_realm: { employees: App\Security\StaffResolver }   # every token of that realm, before by_client
+                #                            # or per client in it: { employees: { by_client: {...}, resolver: ... } }
                 cookie: true                 # optional: also read the access cookie, after the header
                 # token_extractors: [keycloak.token_extractor.header, App\Security\OriginCookieExtractor]
                 #                            # instead of cookie: extractor ids, tried in order
@@ -199,6 +200,29 @@ security:
     firewalls:
         staff: { pattern: ^/staff, stateless: true, keycloak: { realms: [employees], resolver: App\Security\StaffResolver } }
         main: { stateless: true, keycloak: { realms: [customers], resolver: App\Security\CustomerResolver } }
+```
+
+One firewall can take both realms too. `by_client` matches `azp` alone, in whichever realm the client
+is; a realm under `by_realm` takes all of its tokens, through its own resolver or, with `by_client`
+inside it, per client of that realm. So two realms may each have a client of the same id, and a
+realm's tokens never reach a resolver meant for another's. A token of such a realm that neither its
+`by_client` nor its `resolver` claims is refused, which makes the realm's `by_client` its allow-list.
+A client id is unique only within its realm, so on a firewall over several realms, list each
+realm's clients under its `by_realm` entry rather than in the firewall's `by_client`: there, a
+client of the same id created in another realm would be resolved as yours.
+
+```yaml
+security:
+    firewalls:
+        main:
+            stateless: true
+            keycloak:
+                realms: [customers, employees]
+                by_client: { web: App\Security\CustomerResolver, mobile-app: App\Security\CustomerResolver }
+                by_realm:
+                    employees:
+                        by_client: { web: App\Security\StaffResolver, admin-web: App\Security\AdminResolver }
+                        # resolver: App\Security\StaffResolver   # the realm's other clients; without it they are refused
 ```
 
 ### Other issuers and the app's own tokens
@@ -251,7 +275,11 @@ is a configuration error rather than a guess.
 `Claims::roles()` turns the realm roles, and one client's when given, into Symfony roles
 (`offline_access` is `ROLE_OFFLINE_ACCESS`): `new User($claims->sub, $claims->roles('my-api'))`.
 
-Apps name the bundle's services as strings, in YAML and in `#[Autowire]` alike; a typo fails the
+Each client's services autowire by argument name: `KeycloakClient $webClient`,
+`BrowserLogin $webLogin` and, for a confidential client, `ServiceToken $webToken` (a name like
+`mobile-app` is camel-cased: `$mobileAppClient`). The only client also autowires by its bare type,
+and so does the only confidential client's `ServiceToken`; `SessionCookies` always does. Ids work
+too, in YAML and in `#[Autowire(service: 'keycloak.client.web')]`; a typo in either fails the
 container build. Inside the bundle the ids come from the constants on `KeycloakBundle`.
 
 ```php
@@ -276,18 +304,18 @@ Symfony beyond an `HttpClientInterface`, so it works outside the bundle too.
 
 ```php
 public function __construct(
-    #[Autowire(service: 'keycloak.service_token.service')] private ServiceToken $serviceToken,
-    #[Autowire(service: 'keycloak.client.web')] private KeycloakClient $web,
+    private ServiceToken $serviceToken,   // keycloak.service_token.service
+    private KeycloakClient $webClient,    // keycloak.client.web
 ) {}
 
 $this->serviceToken->get();                                      // cached client-credentials token
-$this->web->authorizationUrl($callback, $state, $challenge, ['login_hint' => $email]);
-$this->web->exchangeCode($code, $callback, $verifier);           // TokenSet
-$this->web->refresh($refreshToken);
-$this->web->logout($refreshToken);
-$this->web->revoke($refreshToken);
-$this->web->userinfo($accessToken);                              // the user's claims; needs the openid scope
-$this->web->logoutUrl($afterLogout, $idToken);                   // where a browser ends its SSO session
+$this->webClient->authorizationUrl($callback, $state, $challenge, ['login_hint' => $email]);
+$this->webClient->exchangeCode($code, $callback, $verifier);     // TokenSet
+$this->webClient->refresh($refreshToken);
+$this->webClient->logout($refreshToken);
+$this->webClient->revoke($refreshToken);
+$this->webClient->userinfo($accessToken);                        // the user's claims; needs the openid scope
+$this->webClient->logoutUrl($afterLogout, $idToken);             // where a browser ends its SSO session
 
 // An SPI: a direct grant with its own fields, and the realm's own resources.
 $app->password($email, '', ['session' => $session, 'otp' => $otp]);
@@ -333,15 +361,15 @@ A backend-for-frontend then needs four routes. The web navigates the browser to 
 
 ```php
 public function __construct(
-    #[Autowire(service: 'keycloak.browser_login.web')] private BrowserLogin $login,
-    #[Autowire(service: 'keycloak.client.web')] private KeycloakClient $web,
-    #[Autowire(service: 'keycloak.session_cookies')] private SessionCookies $session,
+    private BrowserLogin $webLogin,
+    private KeycloakClient $webClient,
+    private SessionCookies $session,
 ) {}
 
 #[Route('/auth/login', methods: ['GET'])]
 public function login(Request $request): Response
 {
-    return $this->login->start(
+    return $this->webLogin->start(
         $this->generateUrl('auth_callback', [], UrlGeneratorInterface::ABSOLUTE_URL),
         $request->query->get('return'),
     );
@@ -352,14 +380,14 @@ public function login(Request $request): Response
 public function callback(Request $request): Response
 {
     try {
-        $done = $this->login->finish($request);
+        $done = $this->webLogin->finish($request);
         $response = new RedirectResponse($done->returnTo ?? '/');
         $this->session->set($response, $done->tokens);       // the session: access + refresh cookies
     } catch (LoginFailedException $e) {
         // Back where the login meant to go, with why it did not happen (access_denied...).
         $response = new RedirectResponse(($e->returnTo ?? '/').'#login_error='.($e->error ?? 'failed'));
     }
-    $this->login->clearLoginCookie($response);                // the login cookie is spent either way
+    $this->webLogin->clearLoginCookie($response);             // the login cookie is spent either way
 
     return $response;
 }
@@ -369,7 +397,7 @@ public function refresh(Request $request): Response
 {
     $response = new Response(null, 204);
     try {
-        $this->session->set($response, $this->web->refresh((string) $this->session->refreshToken($request)));
+        $this->session->set($response, $this->webClient->refresh((string) $this->session->refreshToken($request)));
     } catch (RequestRefusedException) {
         $response = new Response(null, 401);                  // the session is over: sign in again
         $this->session->clear($response);
@@ -384,7 +412,7 @@ public function logout(Request $request): Response
     $refreshToken = $this->session->refreshToken($request);
     if (null !== $refreshToken) {
         try {
-            $this->web->logout($refreshToken);                // ends the Keycloak session too
+            $this->webClient->logout($refreshToken);          // ends the Keycloak session too
         } catch (KeycloakException) {
         }
     }

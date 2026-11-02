@@ -13,9 +13,10 @@ use Symfony\Component\Security\Core\User\AttributesBasedUserProviderInterface;
 use Symfony\Component\Security\Core\User\UserInterface;
 
 /**
- * The firewall's user provider: the verified claims in, the principal out, through the resolver of
- * the other issuer that signed the token, else the one registered for the token's client (`azp`),
- * else the default one.
+ * The firewall's user provider: the verified claims in, the principal out, through a resolver
+ * picked by the token's client (`azp`), else a default. A token of an issuer with resolvers of its
+ * own (a `by_realm` realm, an other issuer) is picked among those alone; any other token among the
+ * firewall's.
  *
  * One realm can serve several kinds of principal (the same person may sign in as a customer and as
  * an employee), and the client the token was minted for is what tells them
@@ -27,8 +28,8 @@ use Symfony\Component\Security\Core\User\UserInterface;
 final readonly class ClaimsUserProvider implements AttributesBasedUserProviderInterface
 {
     /**
-     * @param array<string, ClaimsResolverInterface>                                                        $byClient Keycloak client id (`azp`) => resolver
-     * @param list<array{provider: array{url: string, issuer: ?string}, resolver: ClaimsResolverInterface}> $byIssuer the firewall's other issuers, each with its resolver
+     * @param array<string, ClaimsResolverInterface>                                                                                                           $byClient Keycloak client id (`azp`) => resolver
+     * @param list<array{provider: array{url: string, issuer: ?string}, resolver: ?ClaimsResolverInterface, byClient: array<string, ClaimsResolverInterface>}> $byIssuer the issuers with resolvers of their own
      */
     public function __construct(
         private ?ClaimsResolverInterface $default,
@@ -43,23 +44,27 @@ final readonly class ClaimsUserProvider implements AttributesBasedUserProviderIn
     public function loadUserByIdentifier(string $identifier, array $attributes = []): UserInterface
     {
         $claims = Claims::fromAttributes($identifier, $attributes);
-        $resolver = $this->forIssuer($claims->issuer)
-            ?? (null !== $claims->client ? $this->byClient[$claims->client] ?? null : null)
-            ?? $this->default
+        $resolvers = $this->forIssuer($claims->issuer) ?? ['resolver' => $this->default, 'byClient' => $this->byClient];
+        $resolver = (null !== $claims->client ? $resolvers['byClient'][$claims->client] ?? null : null)
+            ?? $resolvers['resolver']
             ?? throw new UserNotFoundException(\sprintf('No principal for tokens of client "%s".', $claims->client ?? ''));
 
         return $resolver->resolve($claims);
     }
 
-    /** The resolver of the other issuer that signed the token, when it is one of them. */
-    private function forIssuer(?string $issuer): ?ClaimsResolverInterface
+    /**
+     * The resolvers of the issuer that signed the token, when it has its own.
+     *
+     * @return ?array{resolver: ?ClaimsResolverInterface, byClient: array<string, ClaimsResolverInterface>}
+     */
+    private function forIssuer(?string $issuer): ?array
     {
         if (null === $issuer) {
             return null;
         }
-        foreach ($this->byIssuer as ['provider' => $provider, 'resolver' => $resolver]) {
-            if (\in_array($issuer, RealmTokenHandlerFactory::issuers([$provider]), true)) {
-                return $resolver;
+        foreach ($this->byIssuer as $entry) {
+            if (\in_array($issuer, RealmTokenHandlerFactory::issuers([$entry['provider']]), true)) {
+                return $entry;
             }
         }
 
