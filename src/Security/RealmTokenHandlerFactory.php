@@ -34,6 +34,8 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
  * A realm whose URL is empty (its env var unset, as in a dev setup living on dev tokens) is not
  * configured: no token names it and it gets no discovery. A firewall left with no provider at all
  * refuses every token it is handed.
+ *
+ * @internal
  */
 final class RealmTokenHandlerFactory
 {
@@ -70,6 +72,7 @@ final class RealmTokenHandlerFactory
         array $otherIssuers = [],
         ?bool $perIssuerKeys = null,
     ): AccessTokenHandlerInterface {
+        $realmIssuers = array_values(array_map(self::issuer(...), array_filter($realms, static fn (array $realm): bool => '' !== $realm['url'])));
         $realms = array_values(array_filter([...$realms, ...$otherIssuers], static fn (array $realm): bool => '' !== $realm['url']));
         if (1 < \count($realms) && !self::$warned && !($perIssuerKeys ?? self::perIssuerKeys())) {
             self::$warned = true;
@@ -91,7 +94,10 @@ final class RealmTokenHandlerFactory
         $handler->enableDiscovery($discoveryCache, array_map(static fn (array $realm): HttpClientInterface => $http->withOptions(['base_uri' => rtrim($realm['url'], '/').'/']), $realms), $cacheKey);
 
         // Symfony caches one provider's keys under the key itself, several under ".issuer_keysets".
-        return new KeyRotationTokenHandler($handler, $discoveryCache, [$cacheKey, $cacheKey.'.issuer_keysets'], $cacheKey.'.refetched', $logger);
+        return new AccessTokenTypeHandler(
+            new KeyRotationTokenHandler($handler, $discoveryCache, [$cacheKey, $cacheKey.'.issuer_keysets'], $cacheKey.'.refetched', $logger),
+            $realmIssuers,
+        );
     }
 
     /**

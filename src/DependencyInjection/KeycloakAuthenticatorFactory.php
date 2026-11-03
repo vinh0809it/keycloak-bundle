@@ -41,6 +41,8 @@ use Symfony\Component\Security\Http\Authenticator\AccessTokenAuthenticator;
  * Every kind of bearer the firewall takes goes through it, as Symfony has one access-token
  * authenticator per firewall: another OpenID provider under `other_issuers`, a token the app issues
  * itself through a decorator of keycloak.token_handler.<firewall>.
+ *
+ * @internal
  */
 final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactoryInterface
 {

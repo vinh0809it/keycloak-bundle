@@ -24,6 +24,8 @@ use Symfony\Component\Security\Core\User\UserInterface;
  * resolver and no default is refused: an unknown client is not a principal of this app.
  *
  * @implements AttributesBasedUserProviderInterface<UserInterface>
+ *
+ * @internal
  */
 final readonly class ClaimsUserProvider implements AttributesBasedUserProviderInterface
 {

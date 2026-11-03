@@ -153,16 +153,24 @@ final class KeycloakBundleTest extends TestCase
         self::build('prod', self::REALM + ['dev_tokens' => ['user.1' => []]]);
     }
 
+    public function testDevTokensAreRefusedOutsideDevAndTestEvenWithDebugOn(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('only be set in the dev and test environments');
+
+        self::build('staging', self::REALM + ['dev_tokens' => ['user.1' => []]]);
+    }
+
     public function testDevTokensAreRefusedWithDebugOff(): void
     {
         $container = new ContainerBuilder();
-        $container->setParameter('kernel.environment', 'staging');
+        $container->setParameter('kernel.environment', 'dev');
         $container->setParameter('kernel.debug', false);
         $container->setParameter('kernel.build_dir', sys_get_temp_dir());
         $container->setParameter('kernel.bundles_metadata', []);
 
         $this->expectException(InvalidConfigurationException::class);
-        $this->expectExceptionMessage('debug off');
+        $this->expectExceptionMessage('with debug on');
 
         (new KeycloakBundle())->getContainerExtension()?->load([self::REALM + ['dev_tokens' => ['user.1' => []]]], $container);
     }
@@ -213,7 +221,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testTheRefreshCookiesLifetimeMayComeFromTheEnvironment(): void
     {
-        $container = self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at'], 'refresh' => ['name' => 'rt', 'session_lifetime' => '%env(int:RT_LIFETIME)%']]]);
+        $container = self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at'], 'refresh' => ['name' => 'rt', 'path' => '/auth', 'session_lifetime' => '%env(int:RT_LIFETIME)%']]]);
 
         self::assertSame('%env(int:RT_LIFETIME)%', $container->getDefinition(KeycloakBundle::SESSION_COOKIES)->getArgument(2));
     }
@@ -438,6 +446,14 @@ final class KeycloakBundleTest extends TestCase
 
         self::assertFalse($container->hasDefinition(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE));
         self::assertFalse($container->hasDefinition(KeycloakBundle::SESSION_COOKIES));
+    }
+
+    public function testTheRefreshCookieNeedsItsPath(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('"path" under "keycloak.cookies.refresh" must be configured');
+
+        self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at'], 'refresh' => ['name' => 'rt']]]);
     }
 
     public function testTheRefreshCookieIsOptional(): void

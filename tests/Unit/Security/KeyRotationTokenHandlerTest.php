@@ -10,6 +10,8 @@ namespace Vinh0809it\KeycloakBundle\Tests\Unit\Security;
 
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
+use Symfony\Component\HttpClient\Exception\TransportException;
+use Vinh0809it\KeycloakBundle\Client\Exception\KeycloakUnavailableException;
 use Symfony\Component\Security\Core\Exception\BadCredentialsException;
 use Symfony\Component\Security\Http\AccessToken\AccessTokenHandlerInterface;
 use Symfony\Component\Security\Http\AccessToken\Oidc\Exception\InvalidSignatureException;
@@ -19,6 +21,7 @@ use Vinh0809it\KeycloakBundle\Security\KeyRotationTokenHandler;
 final class KeyRotationTokenHandlerTest extends TestCase
 {
     private ArrayAdapter $cache;
+    private bool $down = false;
 
     protected function setUp(): void
     {
@@ -60,12 +63,40 @@ final class KeyRotationTokenHandlerTest extends TestCase
         self::assertSame('old', $this->cache->get('keys', static fn (): string => 'new'));
     }
 
-    /** A verifier over the `keys` cache entry: `old` keys verify no token signed by the new key. */
+    public function testARealmThatCannotBeReachedIsUnavailableNotARefusal(): void
+    {
+        $this->down = true;
+
+        $this->expectException(KeycloakUnavailableException::class);
+        $this->handler()->getUserBadgeFrom('signed-by-new');
+    }
+
+    public function testABadSignatureDuringAnOutageLeavesTheKeysItDroppedInPlace(): void
+    {
+        $this->cache->get('keys', static fn (): string => 'old');
+        $this->down = true;
+        $handler = $this->handler();
+
+        try {
+            $handler->getUserBadgeFrom('signed-by-new');
+            self::fail('A token was verified while the realm was down.');
+        } catch (KeycloakUnavailableException) {
+        }
+
+        self::assertSame('old', $this->cache->get('keys', static fn (): string => 'none'), 'the keys are back, so tokens they verify keep working');
+        self::assertSame('user', $handler->getUserBadgeFrom('signed-by-old')->getUserIdentifier());
+    }
+
+    /**
+     * A verifier over the `keys` cache entry: a token `signed-by-X` is verified by keys `X` alone.
+     * Missing keys are fetched as `new`, or fail as the HTTP client does when the realm is down.
+     */
     private function handler(): KeyRotationTokenHandler
     {
         $cache = $this->cache;
-        $inner = new class ($cache) implements AccessTokenHandlerInterface {
-            public function __construct(private ArrayAdapter $cache)
+        $down = &$this->down;
+        $inner = new class ($cache, $down) implements AccessTokenHandlerInterface {
+            public function __construct(private ArrayAdapter $cache, private bool &$down)
             {
             }
 
@@ -74,7 +105,9 @@ final class KeyRotationTokenHandlerTest extends TestCase
                 if ('expired' === $accessToken) {
                     throw new BadCredentialsException('Invalid credentials.');
                 }
-                if ('new' !== $this->cache->get('keys', static fn (): string => 'new')) {
+                $keys = $this->cache->get('keys', fn (): string => $this->down
+                    ? throw new BadCredentialsException('Invalid credentials.', 0, new TransportException('Connection refused')) : 'new');
+                if ('signed-by-'.$keys !== $accessToken) {
                     throw new BadCredentialsException('Invalid credentials.', 0, new InvalidSignatureException());
                 }
 

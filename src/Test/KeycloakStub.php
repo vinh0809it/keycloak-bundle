@@ -44,6 +44,9 @@ class KeycloakStub
     /** @var array<string, JWK> issuer => its signing key: each realm signs with its own */
     private static array $keys = [];
 
+    /** @var array<string, int> issuer => the status every request to it is answered with, while it is down */
+    private static array $outages = [];
+
     /** @var array<string, array<string, mixed>> client id => the claims of its service account's token */
     private array $serviceClients = [];
 
@@ -68,6 +71,18 @@ class KeycloakStub
     public static function reset(): void
     {
         self::$requests = [];
+        self::$outages = [];
+    }
+
+    /** Answers every request to this realm with $status and nothing else, until {@see recover()}. */
+    final public function failWith(int $status = 503): void
+    {
+        self::$outages[$this->issuer()] = $status;
+    }
+
+    final public function recover(): void
+    {
+        unset(self::$outages[$this->issuer()]);
     }
 
     /** The realm's issuer, which is also the URL its endpoints answer under. */
@@ -117,6 +132,9 @@ class KeycloakStub
         $path = (string) parse_url($url, \PHP_URL_PATH);
         parse_str((string) ($options['body'] ?? ''), $form);
         self::$requests[] = $form + ['_path' => $path, '_issuer' => $this->issuer()];
+        if (isset(self::$outages[$this->issuer()])) {
+            return new MockResponse('', ['http_code' => self::$outages[$this->issuer()]]);
+        }
 
         if (str_ends_with($path, '/.well-known/openid-configuration')) {
             return self::json(['issuer' => $this->issuer(), 'jwks_uri' => $this->issuer().'/protocol/openid-connect/certs']);

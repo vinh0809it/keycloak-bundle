@@ -63,7 +63,7 @@ final readonly class KeycloakClient
      * @throws RequestRefusedException      the grant was refused (`invalid_grant`...)
      * @throws KeycloakUnavailableException
      */
-    public function token(array $grant): TokenSet
+    public function token(#[\SensitiveParameter] array $grant): TokenSet
     {
         $body = $this->send('protocol/openid-connect/token', $grant);
         if (!\is_string($body['access_token'] ?? null) || '' === $body['access_token']) {
@@ -85,7 +85,7 @@ final readonly class KeycloakClient
      *
      * @param array<string, string> $extra
      */
-    public function password(string $username, #[\SensitiveParameter] string $password, array $extra = []): TokenSet
+    public function password(string $username, #[\SensitiveParameter] string $password, #[\SensitiveParameter] array $extra = []): TokenSet
     {
         return $this->token(['grant_type' => 'password', 'username' => $username, 'password' => $password] + $extra);
     }
@@ -130,7 +130,7 @@ final readonly class KeycloakClient
         ], static fn (?string $value): bool => null !== $value), '', '&', \PHP_QUERY_RFC3986);
     }
 
-    public function exchangeCode(string $code, string $redirectUri, string $codeVerifier): TokenSet
+    public function exchangeCode(#[\SensitiveParameter] string $code, string $redirectUri, #[\SensitiveParameter] string $codeVerifier): TokenSet
     {
         return $this->token([
             'grant_type' => 'authorization_code',
@@ -194,7 +194,7 @@ final readonly class KeycloakClient
      *
      * @return array<mixed>
      */
-    private function send(string $endpoint, array $form): array
+    private function send(string $endpoint, #[\SensitiveParameter] array $form): array
     {
         $form += ['client_id' => $this->clientId];
         if (null !== $this->clientSecret && '' !== $this->clientSecret) {
@@ -217,7 +217,7 @@ final readonly class KeycloakClient
      *
      * @return array<mixed>
      */
-    private function request(string $method, string $url, array $options): array
+    private function request(string $method, string $url, #[\SensitiveParameter] array $options): array
     {
         try {
             $response = $this->http->request($method, $url, $options);

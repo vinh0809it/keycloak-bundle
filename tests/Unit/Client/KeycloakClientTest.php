@@ -221,6 +221,31 @@ final class KeycloakClientTest extends TestCase
         self::assertCount(2, KeycloakStub::$requests, 'a cached token within the margin is minted again');
     }
 
+    public function testAServiceTokenIsKeptPerClientEvenUnderOneCacheKey(): void
+    {
+        $this->stub->serviceClient('other-api', ['sub' => 'other', 'azp' => 'other-api']);
+        $cache = new ArrayAdapter();
+
+        $first = (new ServiceToken($this->client('test-api', 'secret'), null, $cache, 'svc'))->get();
+        $other = (new ServiceToken($this->client('other-api', 'secret'), null, $cache, 'svc'))->get();
+
+        self::assertNotSame($first, $other, 'a client retargeted under the same name, or another app on the same pool, mints its own');
+        self::assertCount(2, KeycloakStub::$requests);
+    }
+
+    public function testAForgottenServiceTokenIsMintedAgain(): void
+    {
+        $cache = new ArrayAdapter();
+        $token = new ServiceToken($this->client('test-api', 'secret'), null, $cache, 'svc');
+        $token->get();
+
+        $token->forget();
+        $token->get();
+        (new ServiceToken($this->client('test-api', 'secret'), null, $cache, 'svc'))->get();
+
+        self::assertCount(2, KeycloakStub::$requests, 'forgotten in the pool too, then shared again');
+    }
+
     private function client(string $id, ?string $secret): KeycloakClient
     {
         return new KeycloakClient(new MockHttpClient($this->stub), self::REALM.'/', $id, $secret);

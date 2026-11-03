@@ -191,6 +191,11 @@ final class BrowserLoginTest extends TestCase
         yield 'a backslash path' => ['/\\evil.test', false];
         yield 'credentials in the URL' => ['https://web.example.com@evil.test/', false];
         yield 'javascript' => ['javascript:alert(1)', false];
+        yield 'a backslash ending the host of an allowed wildcard' => ['https://evil.test\\.apps.example.com/', false];
+        yield 'a tab in a path' => ["/\t/evil.test", false];
+        yield 'a newline in a path' => ["/\n/evil.test", false];
+        yield 'a space before the host' => [' https://web.example.com/', false];
+        yield 'a percent-encoded host' => ['https://evil%2etest/', false];
     }
 
     #[DataProvider('returnUrls')]

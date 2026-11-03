@@ -194,12 +194,18 @@ final readonly class BrowserLogin
 
     private function allowsReturnTo(string $url): bool
     {
+        // Characters a browser strips from a URL or reads as a slash: `/\t/evil.test` and
+        // `https://evil.test\.example.com` both lead to evil.test.
+        if (1 === preg_match('/[\x00-\x20\x7F\\\\]/', $url)) {
+            return false;
+        }
         if (str_starts_with($url, '/')) {
-            return !str_starts_with($url, '//') && !str_contains($url, '\\');
+            return !str_starts_with($url, '//');
         }
 
         $parts = parse_url($url);
-        if (false === $parts || !\in_array($parts['scheme'] ?? null, ['http', 'https'], true) || !isset($parts['host']) || isset($parts['user']) || isset($parts['pass'])) {
+        if (false === $parts || !\in_array($parts['scheme'] ?? null, ['http', 'https'], true) || !isset($parts['host']) || isset($parts['user']) || isset($parts['pass'])
+            || 1 !== preg_match('/^[A-Za-z0-9.-]+$/', $parts['host'])) {
             return false;
         }
         $scheme = $parts['scheme'].'://';
