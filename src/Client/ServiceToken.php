@@ -29,7 +29,7 @@ final class ServiceToken
 
     /**
      * @param \Closure(): int|null $clock    the current Unix time; time() when null
-     * @param string $cacheKey the pool key's prefix; the realm and the client id complete it
+     * @param string               $cacheKey the pool key's prefix; the realm and the client id complete it
      */
     public function __construct(
         private readonly KeycloakClient $client,
