@@ -19,6 +19,8 @@ use Symfony\Component\Security\Http\Authenticator\Passport\Badge\UserBadge;
  * attribute shape the `oidc` handler produces for a Keycloak token, so the user provider resolves
  * it through the very same branch as a real one. Anything else goes to the decorated handler, so
  * a signed token keeps working beside the fake ones. The bundle refuses to register this in prod.
+ *
+ * @internal
  */
 final readonly class DevTokenHandler implements AccessTokenHandlerInterface
 {

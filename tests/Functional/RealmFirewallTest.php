@@ -180,6 +180,26 @@ final class RealmFirewallTest extends WebTestCase
         self::assertSame('{"user":"member:sub-1"}', $this->client->getResponse()->getContent(), 'and every other bearer still reaches the realms');
     }
 
+    public function testARealmsIdOrLogoutTokenIsNoAccessToken(): void
+    {
+        foreach (['ID', 'Logout', 'Refresh'] as $type) {
+            $this->client->request('GET', '/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token(['typ' => $type])]);
+            self::assertResponseStatusCodeSame(401, $type);
+        }
+        foreach (['Bearer', 'bearer', null] as $type) {
+            $this->client->request('GET', '/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token(null !== $type ? ['typ' => $type] : [])]);
+            self::assertResponseIsSuccessful((string) $type);
+        }
+    }
+
+    public function testAnOtherIssuersTokenTypeIsItsOwnBusiness(): void
+    {
+        $token = self::getContainer()->get('test.realm.legacy')->sign(['sub' => 'sub-1', 'aud' => 'api', 'typ' => 'ID']);
+        $this->client->request('GET', '/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$token]);
+
+        self::assertResponseIsSuccessful();
+    }
+
     /** Any other bearer is the one authenticator's to refuse. */
     public function testAnUnknownBearerIsRefused(): void
     {
@@ -245,6 +265,27 @@ final class RealmFirewallTest extends WebTestCase
         $this->client->request('GET', '/members/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token()]);
 
         self::assertSame('{"user":"member:sub-1"}', $this->client->getResponse()->getContent());
+    }
+
+    public function testAnOutageIsAServerErrorAndABadSignatureDuringItLeavesTheKeysInPlace(): void
+    {
+        $this->client->catchExceptions(true);
+        $this->client->request('GET', '/members/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token()]);
+        self::assertResponseIsSuccessful('the keys are cached');
+        self::getContainer()->get('cache.app')->deleteItem(KeycloakBundle::discoveryCacheKey('members').'.refetched');
+
+        $this->members->failWith(503);
+        $forged = $this->staff->sign(['iss' => TestKernel::MEMBERS, 'sub' => 'sub-1', 'aud' => 'api']);
+        $this->client->request('GET', '/members/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$forged]);
+        self::assertResponseStatusCodeSame(500, 'the refetch a bad signature asks for cannot reach the realm');
+
+        $this->client->request('GET', '/members/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token()]);
+        self::assertResponseIsSuccessful('the keys the refetch dropped are back');
+
+        self::getContainer()->get('cache.app')->clear();
+        $this->client->request('GET', '/members/whoami', server: ['HTTP_AUTHORIZATION' => 'Bearer '.$this->token()]);
+        self::assertResponseStatusCodeSame(500, 'no keys and no realm: a server error, not a sign-out');
+        $this->members->recover();
     }
 
     private static function requirePerIssuerKeys(): void

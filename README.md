@@ -98,13 +98,16 @@ and anything else gets a 401.
 
 - **Key rotation**: a token whose signature none of the cached keys verifies has the firewall's
   keys fetched afresh and is verified once more, at most once a minute per firewall, so a key the
-  realm publishes is picked up without clearing a cache.
+  realm publishes is picked up without clearing a cache. A realm that cannot be reached is a
+  `KeycloakUnavailableException` (a server error, not a 401 that would sign the caller out), and a
+  refetch that cannot reach it keeps the keys it had.
 - **The `keycloak` authenticator** of a firewall: Symfony's access-token authenticator, verifying the
   bearer against the realms that firewall accepts, then turning the verified claims into the app's
   principal through a `ClaimsResolverInterface` chosen by the token's issuer (`by_realm`,
   `other_issuers`), else its `azp` (the Keycloak client it was minted for, `by_client`), else the
-  firewall's default. A realm URL works with or without a trailing slash, and its issuer defaults to
-  it. It brings its own user provider, and takes the firewall's own `success_handler` and
+  firewall's default. A realm's ID and logout tokens (`typ` other than `Bearer`) are refused, since
+  Keycloak signs them with the same keys. A realm URL works with or without a trailing slash, and its
+  issuer defaults to it. It brings its own user provider, and takes the firewall's own `success_handler` and
   `failure_handler`.
 - **`keycloak.token_extractor.header`** and, when `cookies` is set,
   **`keycloak.token_extractor.cookie`**: where a firewall finds the token, the
@@ -117,13 +120,15 @@ and anything else gets a 401.
 - **`dev_tokens`**: bearers for local development answering with configured claims, through the
   same resolvers as a real token: literal (`user.1`) or with `{claim}` placeholders (`{azp}~{sub}`
   takes `mobile-app~42` as `azp: mobile-app, sub: 42`). A pattern needs a character no JWT holds
-  outside its placeholders, such as `~` or `:`. Refused in `prod`.
+  outside its placeholders, such as `~` or `:`. Allowed only in the `dev` and `test` environments,
+  with debug on.
 - **`keycloak.client.<name>`** and **`keycloak.browser_login.<name>`** for each entry under
   `clients`, and **`keycloak.service_token.<name>`** for one with a secret. Nothing is registered
   when `clients` is empty. See *Calling the realm* and *Browser login*.
 - **`Vinh0809it\KeycloakBundle\Test\KeycloakStub`**: the realm for a test suite. Discovery, a JWKS the real
   verifier checks against, signed tokens, the client-credentials grant, and hooks for the app's own
-  grants (`onGrant()`, or `grant()` in a subclass) and SPI endpoints (`on()`).
+  grants (`onGrant()`, or `grant()` in a subclass) and SPI endpoints (`on()`), a key rotation
+  (`rotateKey()`) and an outage (`failWith()`, `recover()`).
   **`KeycloakStubRouter`** puts several of them behind one `mock_response_factory`.
 
 ## Configuration reference
@@ -136,7 +141,7 @@ keycloak:
     audience: my-api
     cookies:                                 # optional: a backend-for-frontend's session
         access: { name: app_at, domain: '%env(WEB_COOKIE_DOMAIN)%' }   # path /, same_site lax
-        refresh: { name: app_rt, path: /web, same_site: strict }        # optional
+        refresh: { name: app_rt, path: /web, same_site: strict }        # optional; path required: the refresh and logout routes
         # refresh.session_lifetime: 1209600  seconds for a refresh token without expiry; null = browser session
     clients:                                 # optional: only for a service that calls the realm
         service: { id: my-service, secret: '%env(SERVICE_CLIENT_SECRET)%', token_cache: cache.app }
@@ -146,7 +151,7 @@ keycloak:
 
 when@dev:
     keycloak:
-        dev_tokens:                          # on every keycloak firewall; refused in prod and with debug off
+        dev_tokens:                          # on every keycloak firewall; dev and test environments only, debug on
             'user.1': { azp: mobile-app, username: 'user@example.com' }
             '{azp}~{sub}': { email_verified: true }   # any client, any subject
 ```
@@ -309,6 +314,7 @@ public function __construct(
 ) {}
 
 $this->serviceToken->get();                                      // cached client-credentials token
+$this->serviceToken->forget();                                   // one a downstream service refused: mint another
 $this->webClient->authorizationUrl($callback, $state, $challenge, ['login_hint' => $email]);
 $this->webClient->exchangeCode($code, $callback, $verifier);     // TokenSet
 $this->webClient->refresh($refreshToken);
@@ -369,10 +375,12 @@ public function __construct(
 #[Route('/auth/login', methods: ['GET'])]
 public function login(Request $request): Response
 {
-    return $this->webLogin->start(
-        $this->generateUrl('auth_callback', [], UrlGeneratorInterface::ABSOLUTE_URL),
-        $request->query->get('return'),
-    );
+    $callback = $this->generateUrl('auth_callback', [], UrlGeneratorInterface::ABSOLUTE_URL);
+    try {
+        return $this->webLogin->start($callback, $request->query->getString('return') ?: null);
+    } catch (LoginFailedException) {
+        return $this->webLogin->start($callback);                // a return URL it does not allow
+    }
 }
 
 // The realm redirects the browser here; the browser leaves for the page it came from.

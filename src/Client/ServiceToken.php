@@ -29,7 +29,7 @@ final class ServiceToken
 
     /**
      * @param \Closure(): int|null $clock    the current Unix time; time() when null
-     * @param string               $cacheKey the pool key, one per client
+     * @param string $cacheKey the pool key's prefix; the realm and the client id complete it
      */
     public function __construct(
         private readonly KeycloakClient $client,
@@ -51,7 +51,7 @@ final class ServiceToken
 
         [$this->token, $this->expiresAt] = null === $this->cache
             ? $this->mint($now)
-            : $this->cache->get($this->cacheKey, function (ItemInterface $item) use ($now): array {
+            : $this->cache->get($this->cacheKey(), function (ItemInterface $item) use ($now): array {
                 $minted = $this->mint($now);
                 $item->expiresAfter(max(1, $minted[1] - $now - self::EXPIRY_MARGIN));
 
@@ -60,11 +60,26 @@ final class ServiceToken
 
         // A cached token another process minted may already be near its end.
         if ($now >= $this->expiresAt - self::EXPIRY_MARGIN) {
-            $this->cache?->delete($this->cacheKey);
+            $this->cache?->delete($this->cacheKey());
             [$this->token, $this->expiresAt] = $this->mint($now);
         }
 
         return $this->token;
+    }
+
+    /**
+     * Drops the token, so the next {@see get()} mints another: for a token a downstream service
+     * refused before it expired.
+     */
+    public function forget(): void
+    {
+        $this->token = null;
+        $this->cache?->delete($this->cacheKey());
+    }
+
+    private function cacheKey(): string
+    {
+        return $this->cacheKey.'.'.hash('xxh128', $this->client->issuer().'|'.$this->client->clientId);
     }
 
     /**

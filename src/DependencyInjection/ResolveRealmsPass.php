@@ -22,6 +22,8 @@ use Symfony\Component\DependencyInjection\Reference;
  *
  * A pass rather than the authenticator factory because the factory runs while the security
  * configuration is loaded, before keycloak's own configuration is guaranteed to be.
+ *
+ * @internal
  */
 final class ResolveRealmsPass implements CompilerPassInterface
 {

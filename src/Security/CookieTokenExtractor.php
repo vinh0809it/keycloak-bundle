@@ -16,6 +16,8 @@ use Symfony\Component\Security\Http\AccessToken\AccessTokenExtractorInterface;
  * HttpOnly cookie. Only WHERE the token is read from: the firewall's token handler still decides
  * whether it is any good. List it after `header`, so a request carrying both is judged by its
  * bearer.
+ *
+ * @internal
  */
 final readonly class CookieTokenExtractor implements AccessTokenExtractorInterface
 {

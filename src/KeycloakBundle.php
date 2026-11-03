@@ -67,6 +67,9 @@ use Symfony\Component\Security\Http\AccessToken\HeaderAccessTokenExtractor;
  */
 final class KeycloakBundle extends AbstractBundle
 {
+    /** The environments `dev_tokens` may be set in. */
+    public const DEV_TOKEN_ENVIRONMENTS = ['dev', 'test'];
+
     /** The realm a one-realm configuration (`realm:` at the root) declares. */
     public const DEFAULT_REALM = 'default';
 
@@ -203,7 +206,7 @@ final class KeycloakBundle extends AbstractBundle
                     ->canBeUnset()
                     ->children()
                         ->append(self::cookieNode('access', '/', 'lax')->isRequired())
-                        ->append(self::cookieNode('refresh', '/', 'strict')
+                        ->append(self::cookieNode('refresh', null, 'strict')
                             ->canBeUnset()
                             ->children()
                                 ->scalarNode('session_lifetime')
@@ -292,8 +295,8 @@ final class KeycloakBundle extends AbstractBundle
         } elseif (null !== $config['issuer']) {
             throw new InvalidConfigurationException('keycloak.issuer belongs with keycloak.realm; under "realms", set each realm\'s own issuer.');
         }
-        if ([] !== $config['dev_tokens'] && ('prod' === $builder->getParameter('kernel.environment') || !$builder->getParameter('kernel.debug'))) {
-            throw new InvalidConfigurationException('keycloak.dev_tokens cannot be set in the prod environment, nor with debug off.');
+        if ([] !== $config['dev_tokens'] && (!\in_array($builder->getParameter('kernel.environment'), self::DEV_TOKEN_ENVIRONMENTS, true) || !$builder->getParameter('kernel.debug'))) {
+            throw new InvalidConfigurationException(\sprintf('keycloak.dev_tokens can only be set in the %s environments, with debug on.', implode(' and ', self::DEV_TOKEN_ENVIRONMENTS)));
         }
         foreach (array_keys($config['dev_tokens']) as $token) {
             $placeholders = DevTokenHandler::placeholders((string) $token);
@@ -400,24 +403,31 @@ final class KeycloakBundle extends AbstractBundle
         }
     }
 
-    private static function cookieNode(string $name, string $path, string $sameSite): ArrayNodeDefinition
+    /**
+     * @param string|null $path the default path; null makes it required
+     */
+    private static function cookieNode(string $name, ?string $path, string $sameSite): ArrayNodeDefinition
     {
-        return (new ArrayNodeDefinition($name))
-            ->children()
-                ->scalarNode('name')->isRequired()->cannotBeEmpty()->end()
-                ->scalarNode('path')->defaultValue($path)->end()
-                ->scalarNode('domain')
-                    ->info('Empty or unset: host-only.')
-                    ->defaultNull()
-                ->end()
-                ->scalarNode('same_site')
-                    ->defaultValue($sameSite)
-                    ->validate()
-                        ->ifTrue(static fn (mixed $v): bool => !\in_array(strtolower((string) $v), ['lax', 'strict', 'none'], true))
-                        ->thenInvalid('same_site must be lax, strict or none, got %s.')
-                    ->end()
+        $node = new ArrayNodeDefinition($name);
+        $node->children()
+            ->scalarNode('name')->isRequired()->cannotBeEmpty()->end()
+            ->scalarNode('domain')
+                ->info('Empty or unset: host-only.')
+                ->defaultNull()
+            ->end()
+            ->scalarNode('same_site')
+                ->defaultValue($sameSite)
+                ->validate()
+                    ->ifTrue(static fn (mixed $v): bool => !\in_array(strtolower((string) $v), ['lax', 'strict', 'none'], true))
+                    ->thenInvalid('same_site must be lax, strict or none, got %s.')
                 ->end()
             ->end();
+        $pathNode = $node->children()->scalarNode('path');
+        null === $path
+            ? $pathNode->info('Only the routes that read the cookie: those that refresh and end the session.')->isRequired()->cannotBeEmpty()
+            : $pathNode->defaultValue($path);
+
+        return $node;
     }
 
     /**

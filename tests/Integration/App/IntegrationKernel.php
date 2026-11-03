@@ -47,7 +47,8 @@ final class IntegrationKernel extends Kernel
 
     public function getCacheDir(): string
     {
-        return sys_get_temp_dir().'/keycloak-bundle-test/'.\PHP_VERSION_ID.'/integration/cache';
+        // One per KEYCLOAK_URL: the realm URL is compiled into the container.
+        return sys_get_temp_dir().'/keycloak-bundle-test/'.\PHP_VERSION_ID.'/integration/'.hash('xxh128', self::realm()).'/cache';
     }
 
     public function getLogDir(): string

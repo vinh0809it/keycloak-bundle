@@ -7,6 +7,41 @@ backward compatibility; each such break is listed here.
 
 ## [Unreleased]
 
+### Security
+
+- `BrowserLogin` accepted return URLs a browser reads differently than `parse_url()` does, leading
+  elsewhere after the login: `https://evil.test\.apps.example.com` against a `https://*.apps.example.com`
+  return origin (a browser reads the backslash as a slash), and paths holding a tab or a newline
+  (`/\t/evil.test`). A return URL holding a control character, a space or a backslash, or whose
+  host is not plain letters, digits, dots and hyphens, is refused now.
+- A realm's ID and logout tokens were accepted as access tokens when their `aud` held the
+  firewall's audience (an ID token's is the client it was issued to). A realm's token whose `typ`
+  is not `Bearer` is refused now; the other issuers' tokens are not checked.
+
+- A realm that could not be reached failed every token with a 401, which clients take for a
+  sign-out, and one token with a bad signature during an outage dropped the cached keys for good:
+  every request then refetched them and failed until the realm was back. A provider that cannot be
+  reached is a `KeycloakUnavailableException` now (a server error), and a refetch that cannot reach
+  it puts the keys it dropped back for five minutes.
+
+### Changed
+
+- `dev_tokens` are allowed only in the `dev` and `test` environments (with debug on), no longer in
+  any environment but `prod`.
+- `cookies.refresh.path` is required: the refresh token should reach only the routes that refresh
+  and end the session, not every route as the former default `/` sent it.
+- A service token's cache key includes its realm and client id, so a client retargeted under the
+  same name, or another app on the same pool, mints its own. Tokens cached before the upgrade are
+  minted again once.
+- The client's grant fields, PKCE verifier and code are `#[\SensitiveParameter]`, out of stack
+  traces.
+- The bundle's plumbing classes are marked `@internal`.
+
+### Added
+
+- `ServiceToken::forget()`, for a token a downstream service refused before it expired.
+- `KeycloakStub::failWith()` and `recover()`: a realm that is down.
+
 ## [0.3.0] - 2026-11-02
 
 ### Added
