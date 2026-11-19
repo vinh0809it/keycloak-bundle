@@ -97,7 +97,7 @@ final class TestKernel extends Kernel
                         'by_realm' => ['staff' => 'test.staff_resolver'],
                         'by_client' => ['staff-web' => 'test.staff_resolver'],
                         'other_issuers' => [['url' => self::LEGACY, 'resolver' => 'test.legacy_resolver']],
-                        'cookie' => true,
+                        'cookie' => 'access_token',
                     ],
                 ],
             ],
@@ -111,7 +111,7 @@ final class TestKernel extends Kernel
                 'members' => ['url' => self::MEMBERS.'/'],
                 'staff' => ['url' => self::STAFF],
             ],
-            'cookies' => ['access' => ['name' => 'access_token'], 'refresh' => ['name' => 'refresh_token', 'path' => '/session']],
+            'session_cookies' => ['access' => ['name' => 'access_token'], 'refresh' => ['name' => 'refresh_token', 'path' => '/session']],
             'dev_tokens' => ['dev.staff' => ['azp' => 'staff-web']],
             'clients' => ['web' => ['realm' => 'members']],
         ]);

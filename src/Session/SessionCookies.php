@@ -18,7 +18,7 @@ use Symfony\Component\HttpFoundation\Response;
  * JavaScript cannot read them (HttpOnly), and they travel only over TLS (Secure). Nothing is
  * stored server-side, so the firewall stays stateless.
  *
- *   access   the access token, read by keycloak.token_extractor.cookie on every request.
+ *   access   the access token, read on every request by a firewall whose `cookie` names it.
  *   refresh  the refresh token, on a narrow path so only the refresh and logout routes see it.
  *
  * Keycloak answers `refresh_expires_in: 0` for a refresh token that lives as long as the SSO

@@ -12,7 +12,6 @@ use Vinh0809it\KeycloakBundle\Client\KeycloakClient;
 use Vinh0809it\KeycloakBundle\Client\ServiceToken;
 use Vinh0809it\KeycloakBundle\DependencyInjection\KeycloakAuthenticatorFactory;
 use Vinh0809it\KeycloakBundle\DependencyInjection\ResolveRealmsPass;
-use Vinh0809it\KeycloakBundle\Security\CookieTokenExtractor;
 use Vinh0809it\KeycloakBundle\Security\DevTokenHandler;
 use Vinh0809it\KeycloakBundle\Security\RealmTokenHandlerFactory;
 use Jose\Component\Core\AlgorithmManager;
@@ -34,16 +33,15 @@ use Symfony\Component\Security\Http\AccessToken\HeaderAccessTokenExtractor;
  * Keycloak realms, declared once: trusting their tokens, and calling them.
  *
  * A realm is any OpenID provider with discovery: a Keycloak realm, or a service's own issuer of
- * legacy tokens. `realm:` + `issuer:` at the root is the one-realm shorthand for
- * `realms: { default: { url, issuer } }`.
+ * legacy tokens. Each is declared by name under `realms`.
  *
  * Trusting tokens is a firewall's `keycloak` authenticator ({@see KeycloakAuthenticatorFactory}),
  * configured in security.yaml with what is the firewall's own: the realms it accepts, the resolver
- * per client, whether the token may ride in the access cookie. What is the realm's stays here.
+ * per client, the cookie the token may also ride in. What is the realm's stays here.
  *
- *  - `keycloak.token_extractor.header` / `.cookie`: the `Authorization: Bearer` header, and
- *    the access cookie when `cookies` is set.
- *  - `keycloak.session_cookies`: when `cookies` is set, the {@see SessionCookies} a
+ *  - `keycloak.token_extractor.header`: the `Authorization: Bearer` header; and
+ *    `keycloak.token_extractor.cookie.<firewall>`: the cookie a firewall's `cookie` names.
+ *  - `keycloak.session_cookies`: when `session_cookies` is set, the {@see SessionCookies} a
  *    backend-for-frontend sets and clears the session with.
  *  - `keycloak.client.<name>`: a {@see KeycloakClient} of its realm per entry under
  *    `clients`, its `keycloak.browser_login.<name>` ({@see BrowserLogin}), and
@@ -55,10 +53,10 @@ use Symfony\Component\Security\Http\AccessToken\HeaderAccessTokenExtractor;
  *
  * ```yaml
  * keycloak:
- *     realm: '%env(KEYCLOAK_BASE_URI)%'       # or realms: { customers: {url, issuer}, employees: {...} }
- *     issuer: '%env(KEYCLOAK_ISSUER)%'
+ *     realms:
+ *         customers: { url: '%env(KEYCLOAK_BASE_URI)%', issuer: '%env(KEYCLOAK_ISSUER)%' }
  *     audience: my-api
- *     cookies:
+ *     session_cookies:
  *         access: { name: app_at, domain: '%env(WEB_COOKIE_DOMAIN)%' }
  *         refresh: { name: app_rt, path: /web, same_site: strict }
  *     clients:
@@ -69,9 +67,6 @@ final class KeycloakBundle extends AbstractBundle
 {
     /** The environments `dev_tokens` may be set in. */
     public const DEV_TOKEN_ENVIRONMENTS = ['dev', 'test'];
-
-    /** The realm a one-realm configuration (`realm:` at the root) declares. */
-    public const DEFAULT_REALM = 'default';
 
     /*
      * The ids of the services this bundle registers. A prefix ending in a dot takes the firewall's
@@ -91,6 +86,7 @@ final class KeycloakBundle extends AbstractBundle
     /** + client name: the confidential client's {@see ServiceToken}. */
     public const SERVICE_TOKEN = 'keycloak.service_token.';
     public const TOKEN_EXTRACTOR_HEADER = 'keycloak.token_extractor.header';
+    /** + `.` and the firewall name: the extractor of the cookie that firewall's `cookie` names. */
     public const TOKEN_EXTRACTOR_COOKIE = 'keycloak.token_extractor.cookie';
     public const SESSION_COOKIES = 'keycloak.session_cookies';
     public const BROWSER_LOGIN = 'keycloak.browser_login.';
@@ -145,14 +141,6 @@ final class KeycloakBundle extends AbstractBundle
     {
         $definition->rootNode()
             ->children()
-                ->scalarNode('realm')
-                    ->info('One-realm shorthand: the realm URL this service reaches Keycloak at, e.g. http://keycloak:8080/realms/customers. Declares the realm "default".')
-                    ->defaultNull()
-                ->end()
-                ->scalarNode('issuer')
-                    ->info('One-realm shorthand: the realm URL as tokens name it in `iss`, when it differs from `realm` (a public host).')
-                    ->defaultNull()
-                ->end()
                 ->arrayNode('realms')
                     ->info('Realms by name: every OpenID provider whose tokens a firewall accepts or whose clients this service calls as.')
                     ->normalizeKeys(false)
@@ -201,8 +189,8 @@ final class KeycloakBundle extends AbstractBundle
                         ->end()
                     ->end()
                 ->end()
-                ->arrayNode('cookies')
-                    ->info('The session cookies of a backend-for-frontend; registers keycloak.token_extractor.cookie and keycloak.session_cookies.')
+                ->arrayNode('session_cookies')
+                    ->info('The cookies this service keeps a browser\'s session in, as a backend-for-frontend; registers keycloak.session_cookies. A firewall reads the access one when its `cookie` names it.')
                     ->canBeUnset()
                     ->children()
                         ->append(self::cookieNode('access', '/', 'lax')->isRequired())
@@ -242,25 +230,31 @@ final class KeycloakBundle extends AbstractBundle
                                 ->info('Cache pool sharing the service token across requests and workers (cache.app, say); unset, it lives only as long as the service.')
                                 ->defaultNull()
                             ->end()
-                            ->arrayNode('return_origins')
-                                ->info('Origins (https://web.example.com, or https://*.example.com for its subdomains) a browser login may return to besides this app\'s own paths.')
-                                ->scalarPrototype()->end()
-                            ->end()
-                            ->arrayNode('login_cookie')
-                                ->info('The cookie keycloak.browser_login.<name> keeps a browser\'s login in between its start and its callback.')
+                            ->arrayNode('browser_login')
+                                ->info('The browser login keycloak.browser_login.<name> runs as this client.')
                                 ->addDefaultsIfNotSet()
                                 ->children()
-                                    ->scalarNode('name')
-                                        ->info('Defaults to keycloak_login_<name>.')
-                                        ->defaultNull()
+                                    ->arrayNode('return_origins')
+                                        ->info('Origins (https://web.example.com, or https://*.example.com for its subdomains) a login may return to besides this app\'s own paths.')
+                                        ->scalarPrototype()->end()
                                     ->end()
-                                    ->scalarNode('path')
-                                        ->info('Must cover the callback route.')
-                                        ->defaultValue('/')
-                                    ->end()
-                                    ->scalarNode('domain')
-                                        ->info('Empty or unset: host-only.')
-                                        ->defaultNull()
+                                    ->arrayNode('cookie')
+                                        ->info('The cookie that keeps a login in between its start and its callback.')
+                                        ->addDefaultsIfNotSet()
+                                        ->children()
+                                            ->scalarNode('name')
+                                                ->info('Defaults to keycloak_login_<name>.')
+                                                ->defaultNull()
+                                            ->end()
+                                            ->scalarNode('path')
+                                                ->info('Must cover the callback route.')
+                                                ->defaultValue('/')
+                                            ->end()
+                                            ->scalarNode('domain')
+                                                ->info('Empty or unset: host-only.')
+                                                ->defaultNull()
+                                            ->end()
+                                        ->end()
                                     ->end()
                                 ->end()
                             ->end()
@@ -272,29 +266,19 @@ final class KeycloakBundle extends AbstractBundle
 
     /**
      * @param array{
-     *     realm: ?string,
-     *     issuer: ?string,
      *     realms: array<string, array{url: string, issuer: ?string}>,
      *     audience: ?string,
      *     algorithms: list<string>,
      *     discovery_cache: string,
      *     http_client: string,
      *     dev_tokens: array<string, array<string, mixed>>,
-     *     cookies?: array{access: array{name: string, path: string, domain: ?string, same_site: string}, refresh?: array{name: string, path: string, domain: ?string, same_site: string, session_lifetime: ?int}},
-     *     clients: array<string, array{realm: ?string, id: ?string, secret: ?string, token_cache: ?string, return_origins: list<string>, login_cookie: array{name: ?string, path: string, domain: ?string}}>
+     *     session_cookies?: array{access: array{name: string, path: string, domain: ?string, same_site: string}, refresh?: array{name: string, path: string, domain: ?string, same_site: string, session_lifetime: ?int}},
+     *     clients: array<string, array{realm: ?string, id: ?string, secret: ?string, token_cache: ?string, browser_login: array{return_origins: list<string>, cookie: array{name: ?string, path: string, domain: ?string}}}>
      * } $config
      */
     public function loadExtension(array $config, ContainerConfigurator $container, ContainerBuilder $builder): void
     {
         $realms = $config['realms'];
-        if (null !== $config['realm']) {
-            if (isset($realms[self::DEFAULT_REALM])) {
-                throw new InvalidConfigurationException('keycloak: declare the realm "default" either with "realm" at the root or under "realms", not both.');
-            }
-            $realms[self::DEFAULT_REALM] = ['url' => $config['realm'], 'issuer' => $config['issuer']];
-        } elseif (null !== $config['issuer']) {
-            throw new InvalidConfigurationException('keycloak.issuer belongs with keycloak.realm; under "realms", set each realm\'s own issuer.');
-        }
         if ([] !== $config['dev_tokens'] && (!\in_array($builder->getParameter('kernel.environment'), self::DEV_TOKEN_ENVIRONMENTS, true) || !$builder->getParameter('kernel.debug'))) {
             throw new InvalidConfigurationException(\sprintf('keycloak.dev_tokens can only be set in the %s environments, with debug on.', implode(' and ', self::DEV_TOKEN_ENVIRONMENTS)));
         }
@@ -326,11 +310,9 @@ final class KeycloakBundle extends AbstractBundle
             ->setArguments([$config['algorithms']]);
 
         $builder->register(self::TOKEN_EXTRACTOR_HEADER, HeaderAccessTokenExtractor::class);
-        if (isset($config['cookies'])) {
-            $access = $config['cookies']['access'];
-            $refresh = $config['cookies']['refresh'] ?? null;
-            $builder->register(self::TOKEN_EXTRACTOR_COOKIE, CookieTokenExtractor::class)
-                ->setArguments([$access['name']]);
+        if (isset($config['session_cookies'])) {
+            $access = $config['session_cookies']['access'];
+            $refresh = $config['session_cookies']['refresh'] ?? null;
             $builder->register(self::SESSION_COOKIES, SessionCookies::class)
                 ->setArguments([
                     self::cookieOptions($access),
@@ -355,13 +337,13 @@ final class KeycloakBundle extends AbstractBundle
                 ->setArguments([
                     new Reference(self::CLIENT.$name),
                     new Definition(CookieOptions::class, [
-                        $client['login_cookie']['name'] ?? 'keycloak_login_'.$name,
-                        $client['login_cookie']['path'],
-                        $client['login_cookie']['domain'],
+                        $client['browser_login']['cookie']['name'] ?? 'keycloak_login_'.$name,
+                        $client['browser_login']['cookie']['path'],
+                        $client['browser_login']['cookie']['domain'],
                         'lax',
                     ]),
                     '%kernel.secret%',
-                    $client['return_origins'],
+                    $client['browser_login']['return_origins'],
                 ]);
 
             if (null !== $client['secret']) {

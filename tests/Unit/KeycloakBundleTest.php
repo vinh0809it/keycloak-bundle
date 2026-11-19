@@ -14,7 +14,6 @@ use Vinh0809it\KeycloakBundle\DependencyInjection\KeycloakAuthenticatorFactory;
 use Vinh0809it\KeycloakBundle\DependencyInjection\ResolveRealmsPass;
 use Vinh0809it\KeycloakBundle\KeycloakBundle;
 use Vinh0809it\KeycloakBundle\Security\ClaimsUserProvider;
-use Vinh0809it\KeycloakBundle\Security\CookieTokenExtractor;
 use Vinh0809it\KeycloakBundle\Security\DevTokenHandler;
 use Vinh0809it\KeycloakBundle\Security\RealmTokenHandlerFactory;
 use Vinh0809it\KeycloakBundle\Session\BrowserLogin;
@@ -32,11 +31,12 @@ use Symfony\Component\Security\Http\Authenticator\AccessTokenAuthenticator;
 
 final class KeycloakBundleTest extends TestCase
 {
-    private const REALM = ['realm' => '%env(KEYCLOAK_BASE_URI)%', 'audience' => 'my-api'];
+    private const REALM = ['realms' => ['customers' => ['url' => '%env(KEYCLOAK_BASE_URI)%']], 'audience' => 'my-api'];
+    private const REALM_WITH_ISSUER = ['realms' => ['customers' => ['url' => '%env(KEYCLOAK_BASE_URI)%', 'issuer' => 'https://sso.example/realms/customers']], 'audience' => 'my-api'];
 
-    public function testTheOneRealmShorthandIsTheRealmAKeycloakFirewallAccepts(): void
+    public function testTheOnlyRealmIsTheOneAKeycloakFirewallAccepts(): void
     {
-        $container = self::build('dev', self::REALM + ['issuer' => 'https://sso.example/realms/customers'], ['main' => ['resolver' => 'r']]);
+        $container = self::build('dev', self::REALM_WITH_ISSUER, ['main' => ['resolver' => 'r']]);
 
         $handler = $container->getDefinition(KeycloakBundle::TOKEN_HANDLER.'main');
         self::assertSame([RealmTokenHandlerFactory::class, 'create'], $handler->getFactory());
@@ -70,8 +70,8 @@ final class KeycloakBundleTest extends TestCase
 
     public function testTheAuthenticatorBringsItsOwnProviderAndReadsTheCookieWhenAsked(): void
     {
-        $container = self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at']]], [
-            'main' => ['resolver' => 'app.member_resolver', 'by_client' => ['admin-web' => 'app.admin_resolver'], 'cookie' => true],
+        $container = self::build('dev', self::REALM + ['session_cookies' => ['access' => ['name' => 'at']]], [
+            'main' => ['resolver' => 'app.member_resolver', 'by_client' => ['admin-web' => 'app.admin_resolver'], 'cookie' => 'at'],
             'api' => ['by_client' => ['admin-web' => 'app.admin_resolver']],
         ]);
 
@@ -87,7 +87,7 @@ final class KeycloakBundleTest extends TestCase
         self::assertEquals(new Reference(KeycloakBundle::USER_PROVIDER.'main'), $main->getArgument('$userProvider'));
 
         $chain = $container->getDefinition((string) $main->getArgument('$accessTokenExtractor'));
-        self::assertEquals([new Reference(KeycloakBundle::TOKEN_EXTRACTOR_HEADER), new Reference(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE)], $chain->getArgument(0), 'the bearer header first, then the cookie');
+        self::assertEquals([new Reference(KeycloakBundle::TOKEN_EXTRACTOR_HEADER), new Reference(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE.'.main')], $chain->getArgument(0), 'the bearer header first, then the cookie');
         self::assertEquals(new Reference(KeycloakBundle::TOKEN_EXTRACTOR_HEADER), $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'api')->getArgument('$accessTokenExtractor'), 'no cookie: the header alone');
         self::assertSame(HeaderAccessTokenExtractor::class, $container->getDefinition(KeycloakBundle::TOKEN_EXTRACTOR_HEADER)->getClass());
     }
@@ -116,12 +116,37 @@ final class KeycloakBundleTest extends TestCase
         self::assertEquals(new Reference('app.only_extractor'), $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'api')->getArgument('$accessTokenExtractor'), 'one extractor needs no chain');
     }
 
+    public function testAFirewallReadsACookieItNames(): void
+    {
+        $container = self::build('dev', self::REALM, ['staff' => ['resolver' => 'r', 'cookie' => 'sso_token']]);
+
+        $chain = $container->getDefinition((string) $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'staff')->getArgument('$accessTokenExtractor'));
+        self::assertEquals([new Reference(KeycloakBundle::TOKEN_EXTRACTOR_HEADER), new Reference(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE.'.staff')], $chain->getArgument(0));
+        self::assertSame(['sso_token'], $container->getDefinition(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE.'.staff')->getArguments(), 'the firewall names its cookie itself');
+    }
+
+    public function testAnEmptyCookieNameIsAConfigurationError(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('name of the cookie');
+
+        self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'cookie' => '']]);
+    }
+
+    public function testABooleanCookieIsAConfigurationError(): void
+    {
+        $this->expectException(InvalidConfigurationException::class);
+        $this->expectExceptionMessage('name of the cookie');
+
+        self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'cookie' => true]]);
+    }
+
     public function testCookieAndTokenExtractorsTogetherAreAConfigurationError(): void
     {
         $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('"cookie" or "token_extractors"');
 
-        self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'cookie' => true, 'token_extractors' => ['x']]]);
+        self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'cookie' => 'at', 'token_extractors' => ['x']]]);
     }
 
     public function testDevTokensDecorateEveryKeycloakFirewallsHandler(): void
@@ -221,7 +246,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testTheRefreshCookiesLifetimeMayComeFromTheEnvironment(): void
     {
-        $container = self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at'], 'refresh' => ['name' => 'rt', 'path' => '/auth', 'session_lifetime' => '%env(int:RT_LIFETIME)%']]]);
+        $container = self::build('dev', self::REALM + ['session_cookies' => ['access' => ['name' => 'at'], 'refresh' => ['name' => 'rt', 'path' => '/auth', 'session_lifetime' => '%env(int:RT_LIFETIME)%']]]);
 
         self::assertSame('%env(int:RT_LIFETIME)%', $container->getDefinition(KeycloakBundle::SESSION_COOKIES)->getArgument(2));
     }
@@ -231,22 +256,14 @@ final class KeycloakBundleTest extends TestCase
         $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('same_site');
 
-        self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at', 'same_site' => 'loose']]]);
-    }
-
-    public function testReadingTheCookieNeedsItsName(): void
-    {
-        $this->expectException(InvalidConfigurationException::class);
-        $this->expectExceptionMessage('keycloak.cookies.access');
-
-        self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'cookie' => true]]);
+        self::build('dev', self::REALM + ['session_cookies' => ['access' => ['name' => 'at', 'same_site' => 'loose']]]);
     }
 
     public function testEachClientHasABrowserLoginWithItsOwnCookie(): void
     {
         $container = self::build('dev', self::REALM + ['clients' => [
             'web' => [],
-            'admin' => ['login_cookie' => ['name' => 'admin_login', 'path' => '/admin', 'domain' => 'app.test'], 'return_origins' => ['https://admin.app.test']],
+            'admin' => ['browser_login' => ['cookie' => ['name' => 'admin_login', 'path' => '/admin', 'domain' => 'app.test'], 'return_origins' => ['https://admin.app.test']]],
         ]]);
 
         $web = $container->getDefinition(KeycloakBundle::BROWSER_LOGIN.'web');
@@ -405,9 +422,7 @@ final class KeycloakBundleTest extends TestCase
         yield 'a client without a realm, several declared' => [['realms' => $two, 'clients' => ['web' => []]], [], 'keycloak.clients.web must name its realm'];
         yield 'an undeclared realm' => [['audience' => 'x', 'realms' => $two], ['main' => ['realms' => ['c'], 'resolver' => 'r']], 'names the realm "c"'];
         yield 'no realm at all' => [['audience' => 'x'], ['main' => ['resolver' => 'r']], 'none is declared'];
-        yield 'the default realm twice' => [['realm' => 'http://kc/realms/a', 'realms' => ['default' => ['url' => 'http://kc/realms/b']]], [], 'either with "realm"'];
-        yield 'an issuer without its realm' => [['issuer' => 'https://sso/realms/a', 'realms' => $two], [], 'belongs with keycloak.realm'];
-        yield 'a firewall without an audience' => [['realm' => 'http://kc/realms/a'], ['main' => ['resolver' => 'r']], 'needs an "audience"'];
+        yield 'a firewall without an audience' => [['realms' => ['a' => ['url' => 'http://kc/realms/a']]], ['main' => ['resolver' => 'r']], 'needs an "audience"'];
     }
 
     /**
@@ -423,16 +438,12 @@ final class KeycloakBundleTest extends TestCase
         self::build('dev', $config, $firewalls);
     }
 
-    public function testSessionCookiesRegisterTheirExtractorAndService(): void
+    public function testSessionCookiesRegisterTheirService(): void
     {
-        $container = self::build('dev', self::REALM + ['cookies' => [
+        $container = self::build('dev', self::REALM + ['session_cookies' => [
             'access' => ['name' => 'app_at', 'domain' => '%env(WEB_COOKIE_DOMAIN)%'],
             'refresh' => ['name' => 'app_rt', 'path' => '/web', 'session_lifetime' => null],
         ]]);
-
-        $extractor = $container->getDefinition(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE);
-        self::assertSame(CookieTokenExtractor::class, $extractor->getClass());
-        self::assertSame(['app_at'], $extractor->getArguments(), 'the extractor reads the access cookie');
 
         [$access, $refresh, $lifetime] = $container->getDefinition(KeycloakBundle::SESSION_COOKIES)->getArguments();
         self::assertSame(['app_at', '/', '%env(WEB_COOKIE_DOMAIN)%', 'lax'], $access->getArguments());
@@ -451,14 +462,14 @@ final class KeycloakBundleTest extends TestCase
     public function testTheRefreshCookieNeedsItsPath(): void
     {
         $this->expectException(InvalidConfigurationException::class);
-        $this->expectExceptionMessage('"path" under "keycloak.cookies.refresh" must be configured');
+        $this->expectExceptionMessage('"path" under "keycloak.session_cookies.refresh" must be configured');
 
-        self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at'], 'refresh' => ['name' => 'rt']]]);
+        self::build('dev', self::REALM + ['session_cookies' => ['access' => ['name' => 'at'], 'refresh' => ['name' => 'rt']]]);
     }
 
     public function testTheRefreshCookieIsOptional(): void
     {
-        $container = self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at']]]);
+        $container = self::build('dev', self::REALM + ['session_cookies' => ['access' => ['name' => 'at']]]);
 
         self::assertNull($container->getDefinition(KeycloakBundle::SESSION_COOKIES)->getArgument(1));
     }
@@ -472,7 +483,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testEachClientIsRegisteredAndAConfidentialOneGetsAServiceToken(): void
     {
-        $container = self::build('dev', self::REALM + ['issuer' => 'https://sso.example/realms/customers', 'clients' => [
+        $container = self::build('dev', self::REALM_WITH_ISSUER + ['clients' => [
             'service' => ['id' => 'my-service', 'secret' => '%env(SERVICE_CLIENT_SECRET)%'],
             'mobile-app' => [],
         ]]);
@@ -488,7 +499,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testEachClientAutowiresByName(): void
     {
-        $container = self::build('dev', self::REALM + ['cookies' => ['access' => ['name' => 'at']], 'clients' => [
+        $container = self::build('dev', self::REALM + ['session_cookies' => ['access' => ['name' => 'at']], 'clients' => [
             'service' => ['secret' => 's'],
             'mobile-app' => [],
             '1st' => [],
@@ -550,14 +561,14 @@ final class KeycloakBundleTest extends TestCase
      *
      * @param array<string, mixed> $block
      *
-     * @return array{realms: list<string>, audience: ?string, resolver: ?string, by_client: array<string, string>, cookie: bool}
+     * @return array{realms: list<string>, audience: ?string, resolver: ?string, by_client: array<string, string>, cookie: ?string}
      */
     private static function firewall(array $block): array
     {
         $node = new ArrayNodeDefinition('keycloak');
         (new KeycloakAuthenticatorFactory())->addConfiguration($node);
 
-        /* @var array{realms: list<string>, audience: ?string, resolver: ?string, by_client: array<string, string>, cookie: bool} */
+        /* @var array{realms: list<string>, audience: ?string, resolver: ?string, by_client: array<string, string>, cookie: ?string} */
         return (new Processor())->process($node->getNode(true), [$block]);
     }
 }

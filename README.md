@@ -53,7 +53,8 @@ the Keycloak client adds it):
 ```yaml
 # config/packages/keycloak.yaml
 keycloak:
-    realm: '%env(KEYCLOAK_URL)%'          # e.g. https://sso.example.com/realms/my-realm
+    realms:
+        main: { url: '%env(KEYCLOAK_URL)%' }   # e.g. https://sso.example.com/realms/my-realm
     audience: my-api
 ```
 
@@ -109,11 +110,10 @@ and anything else gets a 401.
   Keycloak signs them with the same keys. A realm URL works with or without a trailing slash, and its
   issuer defaults to it. It brings its own user provider, and takes the firewall's own `success_handler` and
   `failure_handler`.
-- **`keycloak.token_extractor.header`** and, when `cookies` is set,
-  **`keycloak.token_extractor.cookie`**: where a firewall finds the token, the
-  `Authorization: Bearer` header (Symfony's own extractor) and the access cookie. The firewall
-  lists them in the order it tries them.
-- **`keycloak.session_cookies`**, when `cookies` is set: a backend-for-frontend's session.
+- **`keycloak.token_extractor.header`**: where a firewall finds the token, the
+  `Authorization: Bearer` header (Symfony's own extractor). A firewall's `cookie` names a cookie
+  it reads after it, through **`keycloak.token_extractor.cookie.<firewall>`**.
+- **`keycloak.session_cookies`**, when `session_cookies` is set: a backend-for-frontend's session.
   `set(Response, TokenSet)` writes the access and refresh cookies (HttpOnly, Secure, expiring with
   their tokens), `clear(Response)` ends them, `refreshToken(Request)` reads the refresh token. The
   login and callback routes stay the app's, built on `keycloak.browser_login.<name>`.
@@ -136,17 +136,19 @@ and anything else gets a 401.
 ```yaml
 # config/packages/keycloak.yaml: the realm, and what talks to it
 keycloak:
-    realm: '%env(KEYCLOAK_BASE_URI)%'        # how this service reaches the realm
-    issuer: '%env(KEYCLOAK_ISSUER)%'         # only when tokens name a different (public) URL
+    realms:
+        main:
+            url: '%env(KEYCLOAK_BASE_URI)%'  # how this service reaches the realm
+            issuer: '%env(KEYCLOAK_ISSUER)%' # only when tokens name a different (public) URL
     audience: my-api
-    cookies:                                 # optional: a backend-for-frontend's session
+    session_cookies:                         # optional: the cookies this service keeps a browser's session in
         access: { name: app_at, domain: '%env(WEB_COOKIE_DOMAIN)%' }   # path /, same_site lax
         refresh: { name: app_rt, path: /web, same_site: strict }        # optional; path required: the refresh and logout routes
         # refresh.session_lifetime: 1209600  seconds for a refresh token without expiry; null = browser session
     clients:                                 # optional: only for a service that calls the realm
         service: { id: my-service, secret: '%env(SERVICE_CLIENT_SECRET)%', token_cache: cache.app }
         web: { id: web-app, secret: '%env(WEB_CLIENT_SECRET)%' }
-        # web: { ..., return_origins: [https://web.example.com], login_cookie: { name: web_login, path: /auth } }
+        # web: { ..., browser_login: { return_origins: [https://web.example.com], cookie: { name: web_login, path: /auth } } }
     # algorithms: [RS256]                    # RS*, PS* or ES*; anything else is refused
 
 when@dev:
@@ -168,7 +170,7 @@ security:
                     admin-web: App\Security\AdminResolver
                 # by_realm: { employees: App\Security\StaffResolver }   # every token of that realm, before by_client
                 #                            # or per client in it: { employees: { by_client: {...}, resolver: ... } }
-                cookie: true                 # optional: also read the access cookie, after the header
+                cookie: app_at               # optional: the cookie the token is also read from, after the header
                 # token_extractors: [keycloak.token_extractor.header, App\Security\OriginCookieExtractor]
                 #                            # instead of cookie: extractor ids, tried in order
                 # realms: [customers]         # with several realms
@@ -187,7 +189,7 @@ as with any authenticator.
 
 ### Several realms
 
-`realm:` + `issuer:` is the shorthand for one Keycloak realm, named `default`. A realm whose URL is
+Realms are declared by name under `realms`; with one, firewalls and clients need not name it. A realm whose URL is
 empty (its env var unset, as in a dev setup living on dev tokens) is not configured: it takes no
 token, and nothing is fetched from it. With more, name them,
 and say which ones each firewall accepts and which realm each client belongs to.
@@ -349,17 +351,17 @@ and its `iss` (RFC 9207), then exchanges the code with the kept verifier. A call
 its code spent (Keycloak invalidates a code on a failed exchange), so whoever started the login the
 code belongs to cannot redeem it.
 
-The page to return to is a path of this app, or a URL on one of the client's `return_origins`
+The page to return to is a path of this app, or a URL on one of the client's `browser_login.return_origins`
 (`https://web.example.com`, or `https://*.example.com` for its subdomains). `start()` refuses any
 other, so the one the callback hands back is safe to redirect to.
 
 ```yaml
 keycloak:
-    cookies:
+    session_cookies:
         access: { name: app_at, domain: '%env(COOKIE_DOMAIN)%' }
         refresh: { name: app_rt, path: /auth }
     clients:
-        web: { id: web-app, secret: '%env(WEB_CLIENT_SECRET)%', return_origins: ['%env(WEB_ORIGIN)%'] }
+        web: { id: web-app, secret: '%env(WEB_CLIENT_SECRET)%', browser_login: { return_origins: ['%env(WEB_ORIGIN)%'] } }
 ```
 
 A backend-for-frontend then needs four routes. The web navigates the browser to `/auth/login`
@@ -438,7 +440,7 @@ subdomains of the same site, so check the `Origin` header against the web's orig
 
 A browser holds one login at a time: one started in a second tab replaces the first, whose callback
 then fails. The login cookie's name (`keycloak_login_<name>` by default), path and domain are set
-under `clients.<name>.login_cookie`; its path must cover the callback. The ID token is not
+under `clients.<name>.browser_login.cookie`; its path must cover the callback. The ID token is not
 verified, so there is no `nonce`: the session is the access and refresh tokens, which the firewall
 verifies on each request.
 
