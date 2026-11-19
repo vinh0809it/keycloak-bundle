@@ -36,7 +36,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testTheOnlyRealmIsTheOneAKeycloakFirewallAccepts(): void
     {
-        $container = self::build('dev', self::REALM_WITH_ISSUER, ['main' => ['resolver' => 'r']]);
+        $container = self::build('dev', self::REALM_WITH_ISSUER, ['main' => ['resolvers' => ['default' => 'r']]]);
 
         $handler = $container->getDefinition(KeycloakBundle::TOKEN_HANDLER.'main');
         self::assertSame([RealmTokenHandlerFactory::class, 'create'], $handler->getFactory());
@@ -56,9 +56,9 @@ final class KeycloakBundleTest extends TestCase
                 'employees' => ['url' => 'http://kc/realms/employees'],
             ],
         ], [
-            'customer' => ['realms' => ['customers'], 'resolver' => 'r'],
-            'staff' => ['realms' => ['employees'], 'audience' => 'shop-api-staff', 'resolver' => 'r'],
-            'sso' => ['realms' => ['customers', 'employees'], 'resolver' => 'r'],
+            'customer' => ['realms' => ['customers'], 'resolvers' => ['default' => 'r']],
+            'staff' => ['realms' => ['employees'], 'audience' => 'shop-api-staff', 'resolvers' => ['default' => 'r']],
+            'sso' => ['realms' => ['customers', 'employees'], 'resolvers' => ['default' => 'r']],
         ]);
 
         self::assertSame([['url' => 'http://kc/realms/customers', 'issuer' => 'https://sso/realms/customers']], $container->getDefinition(KeycloakBundle::TOKEN_HANDLER.'customer')->getArgument('$realms'));
@@ -71,8 +71,8 @@ final class KeycloakBundleTest extends TestCase
     public function testTheAuthenticatorBringsItsOwnProviderAndReadsTheCookieWhenAsked(): void
     {
         $container = self::build('dev', self::REALM + ['session_cookies' => ['access' => ['name' => 'at']]], [
-            'main' => ['resolver' => 'app.member_resolver', 'by_client' => ['admin-web' => 'app.admin_resolver'], 'cookie' => 'at'],
-            'api' => ['by_client' => ['admin-web' => 'app.admin_resolver']],
+            'main' => ['resolvers' => ['default' => 'app.member_resolver', 'by_client' => ['admin-web' => 'app.admin_resolver']], 'cookie' => 'at'],
+            'api' => ['resolvers' => ['by_client' => ['admin-web' => 'app.admin_resolver']]],
         ]);
 
         $provider = $container->getDefinition(KeycloakBundle::USER_PROVIDER.'main');
@@ -95,7 +95,7 @@ final class KeycloakBundleTest extends TestCase
     public function testOtherIssuersAreVerifiedByTheSameHandlerAndResolvedByTheirOwnResolver(): void
     {
         $container = self::build('dev', self::REALM, ['main' => [
-            'resolver' => 'app.member_resolver',
+            'resolvers' => ['default' => 'app.member_resolver'],
             'other_issuers' => [['url' => '%env(LEGACY_BASE_URI)%', 'issuer' => '%env(LEGACY_ISSUER)%', 'resolver' => 'app.legacy_resolver']],
         ]]);
 
@@ -107,8 +107,8 @@ final class KeycloakBundleTest extends TestCase
     public function testExplicitTokenExtractorsAreTriedInTheirOrder(): void
     {
         $container = self::build('dev', self::REALM, [
-            'main' => ['resolver' => 'r', 'token_extractors' => [KeycloakBundle::TOKEN_EXTRACTOR_HEADER, 'app.origin_cookie_extractor']],
-            'api' => ['resolver' => 'r', 'token_extractors' => ['app.only_extractor']],
+            'main' => ['resolvers' => ['default' => 'r'], 'token_extractors' => [KeycloakBundle::TOKEN_EXTRACTOR_HEADER, 'app.origin_cookie_extractor']],
+            'api' => ['resolvers' => ['default' => 'r'], 'token_extractors' => ['app.only_extractor']],
         ]);
 
         $chain = $container->getDefinition((string) $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'main')->getArgument('$accessTokenExtractor'));
@@ -118,7 +118,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testAFirewallReadsACookieItNames(): void
     {
-        $container = self::build('dev', self::REALM, ['staff' => ['resolver' => 'r', 'cookie' => 'sso_token']]);
+        $container = self::build('dev', self::REALM, ['staff' => ['resolvers' => ['default' => 'r'], 'cookie' => 'sso_token']]);
 
         $chain = $container->getDefinition((string) $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'staff')->getArgument('$accessTokenExtractor'));
         self::assertEquals([new Reference(KeycloakBundle::TOKEN_EXTRACTOR_HEADER), new Reference(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE.'.staff')], $chain->getArgument(0));
@@ -130,7 +130,7 @@ final class KeycloakBundleTest extends TestCase
         $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('name of the cookie');
 
-        self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'cookie' => '']]);
+        self::build('dev', self::REALM, ['main' => ['resolvers' => ['default' => 'r'], 'cookie' => '']]);
     }
 
     public function testABooleanCookieIsAConfigurationError(): void
@@ -138,7 +138,7 @@ final class KeycloakBundleTest extends TestCase
         $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('name of the cookie');
 
-        self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'cookie' => true]]);
+        self::build('dev', self::REALM, ['main' => ['resolvers' => ['default' => 'r'], 'cookie' => true]]);
     }
 
     public function testCookieAndTokenExtractorsTogetherAreAConfigurationError(): void
@@ -146,14 +146,14 @@ final class KeycloakBundleTest extends TestCase
         $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('"cookie" or "token_extractors"');
 
-        self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'cookie' => 'at', 'token_extractors' => ['x']]]);
+        self::build('dev', self::REALM, ['main' => ['resolvers' => ['default' => 'r'], 'cookie' => 'at', 'token_extractors' => ['x']]]);
     }
 
     public function testDevTokensDecorateEveryKeycloakFirewallsHandler(): void
     {
         $container = self::build('test', self::REALM + ['dev_tokens' => ['user.1' => ['azp' => 'mobile-app'], 'dev-token' => []]], [
-            'main' => ['resolver' => 'r'],
-            'api' => ['resolver' => 'r'],
+            'main' => ['resolvers' => ['default' => 'r']],
+            'api' => ['resolvers' => ['default' => 'r']],
         ]);
 
         foreach (['main', 'api'] as $firewall) {
@@ -166,7 +166,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testNoDevTokensNoDecorator(): void
     {
-        $container = self::build('dev', self::REALM, ['main' => ['resolver' => 'r']]);
+        $container = self::build('dev', self::REALM, ['main' => ['resolvers' => ['default' => 'r']]]);
 
         self::assertFalse($container->hasDefinition(KeycloakBundle::DEV_TOKEN_HANDLER.'main'));
     }
@@ -228,7 +228,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testADevTokenWithNoClaimsStandsForNone(): void
     {
-        $container = self::build('dev', self::REALM + ['dev_tokens' => ['user.1' => null]], ['main' => ['resolver' => 'r']]);
+        $container = self::build('dev', self::REALM + ['dev_tokens' => ['user.1' => null]], ['main' => ['resolvers' => ['default' => 'r']]]);
 
         self::assertSame(['user.1' => []], $container->getDefinition(KeycloakBundle::DEV_TOKEN_HANDLER.'main')->getArgument(1));
     }
@@ -239,7 +239,7 @@ final class KeycloakBundleTest extends TestCase
             'audience' => 'shop-api',
             'realms' => ['my-realm' => ['url' => 'http://kc/realms/my-realm'], 'other' => ['url' => 'http://kc/realms/other']],
             'clients' => ['web' => ['realm' => 'my-realm']],
-        ], ['main' => ['realms' => ['my-realm', 'other'], 'by_realm' => ['my-realm' => 'app.resolver']]]);
+        ], ['main' => ['realms' => ['my-realm', 'other'], 'resolvers' => ['by_realm' => ['my-realm' => ['default' => 'app.resolver']]]]]);
 
         self::assertSame([['url' => 'http://kc/realms/my-realm', 'issuer' => null]], [$container->getDefinition(KeycloakBundle::USER_PROVIDER.'main')->getArgument(2)[0]['provider']]);
     }
@@ -278,7 +278,7 @@ final class KeycloakBundleTest extends TestCase
 
     public function testTheFirewallsHandlersAreWrappedAsSecurityBundleWrapsItsOwn(): void
     {
-        $container = self::build('dev', self::REALM, ['main' => ['resolver' => 'r', 'success_handler' => 'app.on_success', 'failure_handler' => 'app.on_failure']]);
+        $container = self::build('dev', self::REALM, ['main' => ['resolvers' => ['default' => 'r'], 'success_handler' => 'app.on_success', 'failure_handler' => 'app.on_failure']]);
         $authenticator = $container->getDefinition(KeycloakBundle::AUTHENTICATOR.'main');
 
         $success = $container->getDefinition((string) $authenticator->getArgument('$successHandler'));
@@ -291,7 +291,7 @@ final class KeycloakBundleTest extends TestCase
         self::assertSame('security.authentication.custom_failure_handler', $failure->getParent());
         self::assertEquals([new Reference('app.on_failure'), []], array_values($failure->getArguments()));
 
-        self::assertNull(self::build('dev', self::REALM, ['main' => ['resolver' => 'r']])->getDefinition(KeycloakBundle::AUTHENTICATOR.'main')->getArgument('$failureHandler'));
+        self::assertNull(self::build('dev', self::REALM, ['main' => ['resolvers' => ['default' => 'r']]])->getDefinition(KeycloakBundle::AUTHENTICATOR.'main')->getArgument('$failureHandler'));
     }
 
     public function testARealmsResolverIsMatchedByThatRealmsIssuer(): void
@@ -302,7 +302,7 @@ final class KeycloakBundleTest extends TestCase
                 'customers' => ['url' => 'http://kc/realms/customers', 'issuer' => 'https://sso/realms/customers'],
                 'employees' => ['url' => 'http://kc/realms/employees'],
             ],
-        ], ['main' => ['realms' => ['customers', 'employees'], 'by_realm' => ['employees' => 'app.staff_resolver']]]);
+        ], ['main' => ['realms' => ['customers', 'employees'], 'resolvers' => ['by_realm' => ['employees' => ['default' => 'app.staff_resolver']]]]]);
 
         self::assertEquals(
             [['provider' => ['url' => 'http://kc/realms/employees', 'issuer' => null], 'resolver' => new Reference('app.staff_resolver'), 'byClient' => []]],
@@ -315,9 +315,7 @@ final class KeycloakBundleTest extends TestCase
         $container = self::build('dev', [
             'audience' => 'shop-api',
             'realms' => ['customers' => ['url' => 'http://kc/realms/customers'], 'employees' => ['url' => 'http://kc/realms/employees']],
-        ], ['main' => ['realms' => ['customers', 'employees'], 'by_client' => ['web' => 'app.member_resolver'], 'by_realm' => [
-            'employees' => ['by_client' => ['web' => 'app.staff_resolver', 'admin-web' => 'app.admin_resolver']],
-        ]]]);
+        ], ['main' => ['realms' => ['customers', 'employees'], 'resolvers' => ['by_client' => ['web' => 'app.member_resolver'], 'by_realm' => ['employees' => ['by_client' => ['web' => 'app.staff_resolver', 'admin-web' => 'app.admin_resolver']]]]]]);
 
         self::assertEquals(
             [['provider' => ['url' => 'http://kc/realms/employees', 'issuer' => null], 'resolver' => null, 'byClient' => [
@@ -331,9 +329,9 @@ final class KeycloakBundleTest extends TestCase
     public function testARealmEntryNeedsAResolverOrAClient(): void
     {
         $this->expectException(InvalidConfigurationException::class);
-        $this->expectExceptionMessage('A by_realm entry needs a "resolver" or a "by_client".');
+        $this->expectExceptionMessage('A resolvers.by_realm entry needs a "default" or a "by_client".');
 
-        self::firewall(['by_realm' => ['employees' => []]]);
+        self::firewall(['resolvers' => ['by_realm' => ['employees' => []]]]);
     }
 
     public function testARealmTheFirewallDoesNotAcceptCannotHaveAResolverThere(): void
@@ -344,7 +342,7 @@ final class KeycloakBundleTest extends TestCase
         self::build('dev', [
             'audience' => 'shop-api',
             'realms' => ['customers' => ['url' => 'http://kc/realms/customers'], 'employees' => ['url' => 'http://kc/realms/employees']],
-        ], ['main' => ['realms' => ['customers'], 'resolver' => 'r', 'by_realm' => ['employees' => 'app.staff_resolver']]]);
+        ], ['main' => ['realms' => ['customers'], 'resolvers' => ['default' => 'r', 'by_realm' => ['employees' => ['default' => 'app.staff_resolver']]]]]);
     }
 
     public function testAStatefulFirewallIsRefused(): void
@@ -357,7 +355,7 @@ final class KeycloakBundleTest extends TestCase
         (new KeycloakBundle())->getContainerExtension()?->load([self::REALM], $container);
         // How SecurityExtension declares a firewall that keeps a session.
         $container->setDefinition('security.firewall.map.config.main', (new ChildDefinition('security.firewall.config'))->replaceArgument(4, false));
-        (new KeycloakAuthenticatorFactory())->createAuthenticator($container, 'main', self::firewall(['resolver' => 'r']), null);
+        (new KeycloakAuthenticatorFactory())->createAuthenticator($container, 'main', self::firewall(['resolvers' => ['default' => 'r']]), null);
 
         $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('stateless: true');
@@ -385,7 +383,7 @@ final class KeycloakBundleTest extends TestCase
     public function testAKeycloakFirewallNeedsAResolverOrAClient(): void
     {
         $this->expectException(InvalidConfigurationException::class);
-        $this->expectExceptionMessage('needs a "resolver"');
+        $this->expectExceptionMessage('needs a resolver: "resolvers.default"');
 
         self::build('dev', self::REALM, ['main' => []]);
     }
@@ -393,7 +391,7 @@ final class KeycloakBundleTest extends TestCase
     public function testAKeycloakFirewallWithoutKeycloakConfiguredIsAConfigurationError(): void
     {
         $container = new ContainerBuilder();
-        (new KeycloakAuthenticatorFactory())->createAuthenticator($container, 'main', self::firewall(['resolver' => 'r']), null);
+        (new KeycloakAuthenticatorFactory())->createAuthenticator($container, 'main', self::firewall(['resolvers' => ['default' => 'r']]), null);
 
         $this->expectException(InvalidConfigurationException::class);
         $this->expectExceptionMessage('keycloak is not configured');
@@ -418,11 +416,11 @@ final class KeycloakBundleTest extends TestCase
     {
         $two = ['a' => ['url' => 'http://kc/realms/a'], 'b' => ['url' => 'http://kc/realms/b']];
 
-        yield 'a firewall without realms, several declared' => [['audience' => 'x', 'realms' => $two], ['main' => ['resolver' => 'r']], 'security.firewalls.main.keycloak must name its realm'];
+        yield 'a firewall without realms, several declared' => [['audience' => 'x', 'realms' => $two], ['main' => ['resolvers' => ['default' => 'r']]], 'security.firewalls.main.keycloak must name its realm'];
         yield 'a client without a realm, several declared' => [['realms' => $two, 'clients' => ['web' => []]], [], 'keycloak.clients.web must name its realm'];
-        yield 'an undeclared realm' => [['audience' => 'x', 'realms' => $two], ['main' => ['realms' => ['c'], 'resolver' => 'r']], 'names the realm "c"'];
-        yield 'no realm at all' => [['audience' => 'x'], ['main' => ['resolver' => 'r']], 'none is declared'];
-        yield 'a firewall without an audience' => [['realms' => ['a' => ['url' => 'http://kc/realms/a']]], ['main' => ['resolver' => 'r']], 'needs an "audience"'];
+        yield 'an undeclared realm' => [['audience' => 'x', 'realms' => $two], ['main' => ['realms' => ['c'], 'resolvers' => ['default' => 'r']]], 'names the realm "c"'];
+        yield 'no realm at all' => [['audience' => 'x'], ['main' => ['resolvers' => ['default' => 'r']]], 'none is declared'];
+        yield 'a firewall without an audience' => [['realms' => ['a' => ['url' => 'http://kc/realms/a']]], ['main' => ['resolvers' => ['default' => 'r']]], 'needs an "audience"'];
     }
 
     /**

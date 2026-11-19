@@ -31,7 +31,8 @@ use Symfony\Component\Security\Http\Authenticator\AccessTokenAuthenticator;
  *             main:
  *                 stateless: true
  *                 keycloak:
- *                     resolver: App\Security\MemberResolver
+ *                     resolvers:
+ *                         default: App\Security\MemberResolver
  *                     cookie: app_at
  *
  * Symfony's own access-token authenticator, the firewall's one for bearers: the token is verified
@@ -74,42 +75,45 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
                     ->info('The `aud` a token must carry here; defaults to keycloak.audience.')
                     ->defaultNull()
                 ->end()
-                ->scalarNode('resolver')
-                    ->info('Service id of the ClaimsResolverInterface for tokens no by_realm, by_client or other_issuers entry claims.')
-                    ->defaultNull()
-                ->end()
-                ->arrayNode('by_realm')
-                    ->info('Realm name (one of this firewall\'s realms) => the resolver of every token that realm issues, or its own resolver and by_client; a token of the realm neither claims is refused.')
-                    ->normalizeKeys(false)
-                    ->useAttributeAsKey('realm')
-                    ->arrayPrototype()
-                        ->beforeNormalization()
-                            ->ifString()->then(static fn (string $resolver): array => ['resolver' => $resolver])
+                ->arrayNode('resolvers')
+                    ->info('Which ClaimsResolverInterface service turns a verified token into the app\'s user: by the token\'s realm first, then its client, then the default.')
+                    ->addDefaultsIfNotSet()
+                    ->children()
+                        ->scalarNode('default')
+                            ->info('Service id of the resolver for tokens no by_realm, by_client or other_issuers entry claims.')
+                            ->defaultNull()
                         ->end()
-                        ->children()
-                            ->scalarNode('resolver')
-                                ->info('Service id of the ClaimsResolverInterface for the realm\'s tokens no by_client entry claims.')
-                                ->defaultNull()
-                            ->end()
-                            ->arrayNode('by_client')
-                                ->info('Keycloak client id (the token\'s azp) in this realm => resolver service id.')
-                                ->normalizeKeys(false)
-                                ->useAttributeAsKey('azp')
-                                ->scalarPrototype()->end()
-                            ->end()
+                        ->arrayNode('by_client')
+                            ->info('Keycloak client id (the token\'s azp) => resolver service id.')
+                            // Client ids are compared to `azp` verbatim: `admin-web` must not become `admin_web`.
+                            ->normalizeKeys(false)
+                            ->useAttributeAsKey('azp')
+                            ->scalarPrototype()->end()
                         ->end()
-                        ->validate()
-                            ->ifTrue(static fn (array $realm): bool => null === $realm['resolver'] && [] === $realm['by_client'])
-                            ->thenInvalid('A by_realm entry needs a "resolver" or a "by_client".')
+                        ->arrayNode('by_realm')
+                            ->info('Realm name (one of this firewall\'s realms) => that realm\'s own default and by_client; a token of the realm neither claims is refused.')
+                            ->normalizeKeys(false)
+                            ->useAttributeAsKey('realm')
+                            ->arrayPrototype()
+                                ->children()
+                                    ->scalarNode('default')
+                                        ->info('Service id of the resolver for the realm\'s tokens no by_client entry claims.')
+                                        ->defaultNull()
+                                    ->end()
+                                    ->arrayNode('by_client')
+                                        ->info('Keycloak client id (the token\'s azp) in this realm => resolver service id.')
+                                        ->normalizeKeys(false)
+                                        ->useAttributeAsKey('azp')
+                                        ->scalarPrototype()->end()
+                                    ->end()
+                                ->end()
+                                ->validate()
+                                    ->ifTrue(static fn (array $realm): bool => null === $realm['default'] && [] === $realm['by_client'])
+                                    ->thenInvalid('A resolvers.by_realm entry needs a "default" or a "by_client".')
+                                ->end()
+                            ->end()
                         ->end()
                     ->end()
-                ->end()
-                ->arrayNode('by_client')
-                    ->info('Keycloak client id (the token\'s azp) => resolver service id.')
-                    // Client ids are compared to `azp` verbatim: `admin-web` must not become `admin_web`.
-                    ->normalizeKeys(false)
-                    ->useAttributeAsKey('azp')
-                    ->scalarPrototype()->end()
                 ->end()
                 ->scalarNode('cookie')
                     ->info('The name of a cookie the token is also read from, after the Authorization header.')
@@ -153,8 +157,8 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
                 ->end()
             ->end()
             ->validate()
-                ->ifTrue(static fn (array $config): bool => null === $config['resolver'] && [] === $config['by_realm'] && [] === $config['by_client'] && [] === $config['other_issuers'])
-                ->thenInvalid('The keycloak authenticator needs a "resolver", or entries under "by_realm", "by_client" or "other_issuers".')
+                ->ifTrue(static fn (array $config): bool => null === $config['resolvers']['default'] && [] === $config['resolvers']['by_realm'] && [] === $config['resolvers']['by_client'] && [] === $config['other_issuers'])
+                ->thenInvalid('The keycloak authenticator needs a resolver: "resolvers.default", or entries under "resolvers.by_realm", "resolvers.by_client" or "other_issuers".')
             ->end()
             ->validate()
                 ->ifTrue(static fn (array $config): bool => null !== $config['cookie'] && [] !== $config['token_extractors'])
@@ -163,7 +167,7 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
     }
 
     /**
-     * @param array{realms: list<string>, audience: ?string, resolver: ?string, by_realm: array<string, array{resolver: ?string, by_client: array<string, string>}>, by_client: array<string, string>, other_issuers: list<array{url: string, issuer: ?string, resolver: string}>, cookie: ?string, token_extractors: list<string>, success_handler: ?string, failure_handler: ?string} $config
+     * @param array{realms: list<string>, audience: ?string, resolvers: array{default: ?string, by_client: array<string, string>, by_realm: array<string, array{default: ?string, by_client: array<string, string>}>}, other_issuers: list<array{url: string, issuer: ?string, resolver: string}>, cookie: ?string, token_extractors: list<string>, success_handler: ?string, failure_handler: ?string} $config
      */
     public function createAuthenticator(ContainerBuilder $container, string $firewallName, array $config, ?string $userProviderId): string
     {
@@ -185,11 +189,11 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
 
         $providerId = KeycloakBundle::USER_PROVIDER.$firewallName;
         $byIssuer = [];
-        foreach ($config['by_realm'] as $realm => $resolvers) {
+        foreach ($config['resolvers']['by_realm'] as $realm => $resolvers) {
             // A realm's name until ResolveRealmsPass, which knows its URL and issuer.
             $byIssuer[] = [
                 'provider' => (string) $realm,
-                'resolver' => self::reference($resolvers['resolver']),
+                'resolver' => self::reference($resolvers['default']),
                 'byClient' => self::references($resolvers['by_client']),
             ];
         }
@@ -201,7 +205,7 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
             ];
         }
         $container->register($providerId, ClaimsUserProvider::class)
-            ->setArguments([self::reference($config['resolver']), self::references($config['by_client']), $byIssuer]);
+            ->setArguments([self::reference($config['resolvers']['default']), self::references($config['resolvers']['by_client']), $byIssuer]);
 
         $extractors = match (true) {
             [] !== $config['token_extractors'] => $config['token_extractors'],

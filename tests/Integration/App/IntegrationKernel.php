@@ -80,8 +80,7 @@ final class IntegrationKernel extends Kernel
                 'main' => [
                     'stateless' => true,
                     'keycloak' => [
-                        'resolver' => 'test.user_resolver',
-                        'by_client' => ['demo-service' => 'test.service_resolver'],
+                        'resolvers' => ['default' => 'test.user_resolver', 'by_client' => ['demo-service' => 'test.service_resolver']],
                     ],
                 ],
             ],

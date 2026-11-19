@@ -7,6 +7,16 @@ backward compatibility; each such break is listed here.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-19
+
+### Changed
+
+- **Breaking:** a firewall's `resolver`, `by_client` and `by_realm` are one block, `resolvers`,
+  with `default` in place of `resolver`: `resolvers: { default, by_client, by_realm }`. A
+  `by_realm` entry is always a map, `{ default, by_client }`; the string form
+  `by_realm: { employees: App\Security\StaffResolver }` is
+  `by_realm: { employees: { default: App\Security\StaffResolver } }`.
+
 ## [0.5.0] - 2026-11-19
 
 ### Changed
@@ -154,7 +164,8 @@ First release. PHP 8.3+, Symfony 7.4.20+ or 8.1.8+, tested against Keycloak 26.
 - `KeycloakStub`: a test realm with discovery, JWKS, signed tokens and hooks for custom grants and
   endpoints.
 
-[Unreleased]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.2.0...v0.3.0

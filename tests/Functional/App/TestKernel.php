@@ -87,15 +87,13 @@ final class TestKernel extends Kernel
                 'members' => [
                     'pattern' => '^/members',
                     'stateless' => true,
-                    'keycloak' => ['realms' => ['members'], 'resolver' => 'test.member_resolver', 'failure_handler' => JsonFailureHandler::class],
+                    'keycloak' => ['realms' => ['members'], 'resolvers' => ['default' => 'test.member_resolver'], 'failure_handler' => JsonFailureHandler::class],
                 ],
                 'main' => [
                     'stateless' => true,
                     'keycloak' => [
                         'realms' => ['members', 'staff'],
-                        'resolver' => 'test.member_resolver',
-                        'by_realm' => ['staff' => 'test.staff_resolver'],
-                        'by_client' => ['staff-web' => 'test.staff_resolver'],
+                        'resolvers' => ['default' => 'test.member_resolver', 'by_client' => ['staff-web' => 'test.staff_resolver'], 'by_realm' => ['staff' => ['default' => 'test.staff_resolver']]],
                         'other_issuers' => [['url' => self::LEGACY, 'resolver' => 'test.legacy_resolver']],
                         'cookie' => 'access_token',
                     ],
