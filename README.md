@@ -68,7 +68,8 @@ security:
             pattern: ^/api
             stateless: true
             keycloak:
-                resolver: App\Security\UserResolver
+                resolvers:
+                    default: App\Security\UserResolver
     access_control:
         - { path: ^/api, roles: IS_AUTHENTICATED_FULLY }
 ```
@@ -165,11 +166,12 @@ security:
         main:
             stateless: true
             keycloak:
-                resolver: App\Security\MemberResolver
-                by_client:                   # optional: azp => resolver, in ANY realm the firewall takes (see Several realms)
-                    admin-web: App\Security\AdminResolver
-                # by_realm: { employees: App\Security\StaffResolver }   # every token of that realm, before by_client
-                #                            # or per client in it: { employees: { by_client: {...}, resolver: ... } }
+                resolvers:                   # which service turns a verified token into the app's user
+                    default: App\Security\MemberResolver   # tokens no entry below claims
+                    by_client:               # optional: azp => resolver, in ANY realm the firewall takes (see Several realms)
+                        admin-web: App\Security\AdminResolver
+                    # by_realm:              # optional: a realm's own default and by_client, tried before the two above
+                    #     employees: { default: App\Security\StaffResolver }
                 cookie: app_at               # optional: the cookie the token is also read from, after the header
                 # token_extractors: [keycloak.token_extractor.header, App\Security\OriginCookieExtractor]
                 #                            # instead of cookie: extractor ids, tried in order
@@ -205,15 +207,15 @@ keycloak:
 
 security:
     firewalls:
-        staff: { pattern: ^/staff, stateless: true, keycloak: { realms: [employees], resolver: App\Security\StaffResolver } }
-        main: { stateless: true, keycloak: { realms: [customers], resolver: App\Security\CustomerResolver } }
+        staff: { pattern: ^/staff, stateless: true, keycloak: { realms: [employees], resolvers: { default: App\Security\StaffResolver } } }
+        main: { stateless: true, keycloak: { realms: [customers], resolvers: { default: App\Security\CustomerResolver } } }
 ```
 
 One firewall can take both realms too. `by_client` matches `azp` alone, in whichever realm the client
-is; a realm under `by_realm` takes all of its tokens, through its own resolver or, with `by_client`
+is; a realm under `by_realm` takes all of its tokens, through its own `default` or, with `by_client`
 inside it, per client of that realm. So two realms may each have a client of the same id, and a
 realm's tokens never reach a resolver meant for another's. A token of such a realm that neither its
-`by_client` nor its `resolver` claims is refused, which makes the realm's `by_client` its allow-list.
+`by_client` nor its `default` claims is refused, which makes the realm's `by_client` its allow-list.
 A client id is unique only within its realm, so on a firewall over several realms, list each
 realm's clients under its `by_realm` entry rather than in the firewall's `by_client`: there, a
 client of the same id created in another realm would be resolved as yours.
@@ -225,11 +227,12 @@ security:
             stateless: true
             keycloak:
                 realms: [customers, employees]
-                by_client: { web: App\Security\CustomerResolver, mobile-app: App\Security\CustomerResolver }
-                by_realm:
-                    employees:
-                        by_client: { web: App\Security\StaffResolver, admin-web: App\Security\AdminResolver }
-                        # resolver: App\Security\StaffResolver   # the realm's other clients; without it they are refused
+                resolvers:
+                    by_client: { web: App\Security\CustomerResolver, mobile-app: App\Security\CustomerResolver }
+                    by_realm:
+                        employees:
+                            by_client: { web: App\Security\StaffResolver, admin-web: App\Security\AdminResolver }
+                            # default: App\Security\StaffResolver   # the realm's other clients; without it they are refused
 ```
 
 ### Other issuers and the app's own tokens
@@ -256,7 +259,8 @@ security:
         main:
             stateless: true
             keycloak:
-                by_client: { mobile-app: App\Security\MobileResolver }
+                resolvers:
+                    by_client: { mobile-app: App\Security\MobileResolver }
                 other_issuers:
                     - { url: '%env(LEGACY_BASE_URI)%', issuer: '%env(LEGACY_ISSUER)%', resolver: App\Security\LegacyResolver }
 ```
