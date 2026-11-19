@@ -10,6 +10,7 @@ namespace Vinh0809it\KeycloakBundle\DependencyInjection;
 
 use Vinh0809it\KeycloakBundle\KeycloakBundle;
 use Vinh0809it\KeycloakBundle\Security\ClaimsUserProvider;
+use Vinh0809it\KeycloakBundle\Security\CookieTokenExtractor;
 use Vinh0809it\KeycloakBundle\Security\RealmTokenHandlerFactory;
 use Symfony\Bundle\SecurityBundle\DependencyInjection\Security\Factory\StatelessAuthenticatorFactoryInterface;
 use Symfony\Component\Config\Definition\Builder\ArrayNodeDefinition;
@@ -31,7 +32,7 @@ use Symfony\Component\Security\Http\Authenticator\AccessTokenAuthenticator;
  *                 stateless: true
  *                 keycloak:
  *                     resolver: App\Security\MemberResolver
- *                     cookie: true
+ *                     cookie: app_at
  *
  * Symfony's own access-token authenticator, the firewall's one for bearers: the token is verified
  * against the Keycloak realms the firewall accepts (declared under `keycloak`) and the other
@@ -110,9 +111,13 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
                     ->useAttributeAsKey('azp')
                     ->scalarPrototype()->end()
                 ->end()
-                ->booleanNode('cookie')
-                    ->info('Also read the token from keycloak.cookies.access, after the Authorization header.')
-                    ->defaultFalse()
+                ->scalarNode('cookie')
+                    ->info('The name of a cookie the token is also read from, after the Authorization header.')
+                    ->defaultNull()
+                    ->validate()
+                        ->ifTrue(static fn (mixed $cookie): bool => !\is_string($cookie) || '' === $cookie)
+                        ->thenInvalid('The keycloak authenticator\'s "cookie" is the name of the cookie to read, e.g. "cookie: app_at".')
+                    ->end()
                 ->end()
                 ->arrayNode('other_issuers')
                     ->info('OpenID providers other than the Keycloak realms whose tokens this firewall takes (another service\'s own tokens, say), each with the resolver of its principals.')
@@ -152,13 +157,13 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
                 ->thenInvalid('The keycloak authenticator needs a "resolver", or entries under "by_realm", "by_client" or "other_issuers".')
             ->end()
             ->validate()
-                ->ifTrue(static fn (array $config): bool => $config['cookie'] && [] !== $config['token_extractors'])
+                ->ifTrue(static fn (array $config): bool => null !== $config['cookie'] && [] !== $config['token_extractors'])
                 ->thenInvalid('The keycloak authenticator takes "cookie" or "token_extractors", not both.')
             ->end();
     }
 
     /**
-     * @param array{realms: list<string>, audience: ?string, resolver: ?string, by_realm: array<string, array{resolver: ?string, by_client: array<string, string>}>, by_client: array<string, string>, other_issuers: list<array{url: string, issuer: ?string, resolver: string}>, cookie: bool, token_extractors: list<string>, success_handler: ?string, failure_handler: ?string} $config
+     * @param array{realms: list<string>, audience: ?string, resolver: ?string, by_realm: array<string, array{resolver: ?string, by_client: array<string, string>}>, by_client: array<string, string>, other_issuers: list<array{url: string, issuer: ?string, resolver: string}>, cookie: ?string, token_extractors: list<string>, success_handler: ?string, failure_handler: ?string} $config
      */
     public function createAuthenticator(ContainerBuilder $container, string $firewallName, array $config, ?string $userProviderId): string
     {
@@ -176,7 +181,7 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
                 '$logger' => new Reference('logger', ContainerInterface::NULL_ON_INVALID_REFERENCE),
                 '$otherIssuers' => array_map(static fn (array $provider): array => ['url' => $provider['url'], 'issuer' => $provider['issuer']], $config['other_issuers']),
             ])
-            ->addTag(ResolveRealmsPass::TAG, ['firewall' => $firewallName, 'cookie' => $config['cookie']]);
+            ->addTag(ResolveRealmsPass::TAG, ['firewall' => $firewallName]);
 
         $providerId = KeycloakBundle::USER_PROVIDER.$firewallName;
         $byIssuer = [];
@@ -200,7 +205,7 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
 
         $extractors = match (true) {
             [] !== $config['token_extractors'] => $config['token_extractors'],
-            $config['cookie'] => [KeycloakBundle::TOKEN_EXTRACTOR_HEADER, KeycloakBundle::TOKEN_EXTRACTOR_COOKIE],
+            null !== $config['cookie'] => [KeycloakBundle::TOKEN_EXTRACTOR_HEADER, self::namedCookieExtractor($container, $firewallName, $config['cookie'])],
             default => [KeycloakBundle::TOKEN_EXTRACTOR_HEADER],
         };
         $extractorId = $extractors[0];
@@ -221,6 +226,15 @@ final class KeycloakAuthenticatorFactory implements StatelessAuthenticatorFactor
             ]);
 
         return $authenticatorId;
+    }
+
+    /** The extractor of the cookie a firewall reads. */
+    private static function namedCookieExtractor(ContainerBuilder $container, string $firewallName, string $name): string
+    {
+        $id = KeycloakBundle::TOKEN_EXTRACTOR_COOKIE.'.'.$firewallName;
+        $container->register($id, CookieTokenExtractor::class)->setArguments([$name]);
+
+        return $id;
     }
 
     private static function reference(?string $serviceId): ?Reference

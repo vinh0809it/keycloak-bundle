@@ -51,9 +51,6 @@ final class ResolveRealmsPass implements CompilerPassInterface
             $handler = $container->getDefinition($id);
 
             self::assertStateless($container, $firewall);
-            if (($tags[0]['cookie'] ?? false) && !$container->hasDefinition(KeycloakBundle::TOKEN_EXTRACTOR_COOKIE)) {
-                throw new InvalidConfigurationException(\sprintf('security.firewalls.%s.keycloak reads the access cookie, which keycloak.cookies.access must name.', $firewall));
-            }
 
             /** @var list<string> $names */
             $names = $handler->getArgument('$realms');

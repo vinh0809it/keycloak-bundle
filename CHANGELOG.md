@@ -7,6 +7,25 @@ backward compatibility; each such break is listed here.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-19
+
+### Changed
+
+- **Breaking:** a firewall's `cookie` is the name of the cookie it reads the token from, after the
+  header: `cookie: app_at`. It was a boolean that pointed at `keycloak.cookies.access`; replace
+  `cookie: true` with that cookie's name. A firewall can now read a cookie another service sets
+  (`cookie: sso_token`) without `keycloak.cookies` and without a `token_extractors` service of the
+  app's own.
+- **Breaking:** `keycloak.cookies` is `keycloak.session_cookies`: the cookies this service writes
+  a browser's session to, as distinct from the cookie a firewall reads. The service
+  `keycloak.token_extractor.cookie` is gone: the extractor of the cookie a firewall reads is
+  `keycloak.token_extractor.cookie.<firewall>`.
+- **Breaking:** the one-realm shorthand `realm:` + `issuer:` is gone. Declare the realm under
+  `realms: { <name>: { url, issuer } }`; with one realm, firewalls and clients still need not
+  name it.
+- **Breaking:** a client's `return_origins` and `login_cookie` moved under `browser_login`, as
+  `browser_login.return_origins` and `browser_login.cookie`.
+
 ## [0.4.0] - 2026-11-03
 
 ### Security
@@ -135,7 +154,8 @@ First release. PHP 8.3+, Symfony 7.4.20+ or 8.1.8+, tested against Keycloak 26.
 - `KeycloakStub`: a test realm with discovery, JWKS, signed tokens and hooks for custom grants and
   endpoints.
 
-[Unreleased]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/vinh0809it/keycloak-bundle/compare/v0.1.0...v0.2.0

@@ -89,7 +89,7 @@ final class IntegrationKernel extends Kernel
         ]);
 
         $container->extension('keycloak', [
-            'realm' => self::realm(),
+            'realms' => ['demo' => ['url' => self::realm()]],
             'audience' => 'demo-api',
             'discovery_cache' => 'cache.app',
         ]);
